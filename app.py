@@ -121,16 +121,18 @@ st.sidebar.caption(
 )
 
 st.sidebar.header("Bộ lọc")
-days_back = st.sidebar.slider("Số ngày gần nhất", min_value=1, max_value=30, value=7)
-include_today = st.sidebar.checkbox(
-    "Bao gồm hôm nay",
-    value=False,
-    help=(
-        "Số của hôm nay là số ĐANG CHẠY, chưa chốt xong — sẽ tăng dần đến hết "
-        "ngày, không dùng để báo cáo chính thức. Chỉ bật khi cần xem tiến độ "
-        "trong ngày."
-    ),
-)
+# Preset kiểu Google Analytics: mỗi lựa chọn = (days_back, include_today). Rõ
+# ràng hơn hẳn slider + checkbox riêng (dễ gây hiểu nhầm "kéo 1-30 ngày" là gì
+# khi tick thêm "bao gồm hôm nay").
+DATE_PRESETS = {
+    "Hôm nay (đang chạy, chưa chốt)": (1, True),
+    "Hôm qua": (1, False),
+    "7 ngày qua": (7, False),
+    "14 ngày qua": (14, False),
+    "30 ngày qua": (30, False),
+}
+date_choice = st.sidebar.selectbox("Khoảng ngày", list(DATE_PRESETS.keys()), index=2)
+days_back, include_today = DATE_PRESETS[date_choice]
 fetch_clicked = st.sidebar.button("🔄 Kéo dữ liệu từ Adjust", type="primary")
 
 # Lưu kết quả vào session_state — để đổi bộ lọc app/quốc gia/campaign bên dưới
@@ -139,14 +141,14 @@ if "df" not in st.session_state:
     st.session_state.df = None
     st.session_state.err = None
     st.session_state.warning_msg = None
-    st.session_state.days_back = None
+    st.session_state.date_choice = None
     st.session_state.include_today = None
 
 if fetch_clicked:
     st.session_state.df, st.session_state.err, st.session_state.warning_msg = load_data(
         days_back, user_app_tokens_raw, user_api_token, include_today
     )
-    st.session_state.days_back = days_back
+    st.session_state.date_choice = date_choice
     st.session_state.include_today = include_today
 
 df = st.session_state.df
@@ -181,12 +183,10 @@ if campaign_search:
     filtered = filtered[filtered["campaign"].str.contains(campaign_search, case=False, na=False)]
 
 # ── Nội dung chính ───────────────────────────────────────────────────
-_moc_cuoi = "hôm nay" if st.session_state.include_today else "hôm qua"
 st.caption(
-    f"Dữ liệu {st.session_state.days_back} ngày gần nhất (tính đến {_moc_cuoi}), "
-    "giờ Việt Nam (UTC+7). Nguồn: Adjust Report Service API. Chưa gồm AdMob/Meta. "
-    "Đổi bộ lọc App/Quốc gia/Campaign bên dưới KHÔNG gọi lại API — chỉ lọc trên "
-    "dữ liệu đã kéo."
+    f"Khoảng ngày: **{st.session_state.date_choice}**, giờ Việt Nam (UTC+7). "
+    "Nguồn: Adjust Report Service API. Chưa gồm AdMob/Meta. Đổi bộ lọc "
+    "App/Quốc gia/Campaign bên dưới KHÔNG gọi lại API — chỉ lọc trên dữ liệu đã kéo."
 )
 if st.session_state.include_today:
     st.warning(

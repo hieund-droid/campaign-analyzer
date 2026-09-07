@@ -70,7 +70,7 @@ def load_data(days_back: int, app_tokens_raw: str):
 
 def weighted_kpis(df: pd.DataFrame) -> dict:
     """Tính KPI tổng hợp ĐÚNG CÁCH — không lấy trung bình/tổng trực tiếp các cột
-    tỉ lệ (network_ecpi, roas_ad_dN, retention_rate_dN) vì sẽ sai (đã kiểm chứng
+    tỉ lệ (ecpi_all, roas_ad_dN, retention_rate_dN) vì sẽ sai (đã kiểm chứng
     bằng số thật, xem GHI_CHU_TIEN_DO.md). Thay vào đó: nhân ra số tuyệt đối mỗi
     dòng, cộng dồn, rồi chia lại — giống cách adjust_test.py đang làm.
     """
@@ -178,14 +178,18 @@ kpis = weighted_kpis(filtered)
 row1 = st.columns(4)
 row1[0].metric("Installs", f"{kpis['installs']:,.0f}")
 row1[1].metric("Chi phí", f"${kpis['cost']:,.2f}")
-row1[2].metric("CPI (tự tính)", fmt_money(kpis["cpi"]))
-row1[3].metric("ARPU D0", fmt_money(kpis.get("arpu_d0")))
+row1[2].metric("Ad Revenue", f"${kpis['ad_revenue']:,.2f}")
+row1[3].metric("CPI (= ecpi_all)", fmt_money(kpis["cpi"]))
 
 row2 = st.columns(4)
-row2[0].metric("ROAS D0", fmt_percent(kpis.get("roas_ad_d0")))
-row2[1].metric("ROAS D7", fmt_percent(kpis.get("roas_ad_d7")))
-row2[2].metric("ROAS D30", fmt_percent(kpis.get("roas_ad_d30")))
-row2[3].metric("Retention D1", fmt_percent(kpis.get("retention_rate_d1")))
+row2[0].metric("ARPU D0", fmt_money(kpis.get("arpu_d0")))
+row2[1].metric("ROAS D0", fmt_percent(kpis.get("roas_ad_d0")))
+row2[2].metric("ROAS D7", fmt_percent(kpis.get("roas_ad_d7")))
+row2[3].metric("ROAS D30", fmt_percent(kpis.get("roas_ad_d30")))
+
+row3 = st.columns(4)
+row3[0].metric("Retention D1", fmt_percent(kpis.get("retention_rate_d1")))
+row3[1].metric("Retention D7", fmt_percent(kpis.get("retention_rate_d7")))
 
 st.subheader("Xu hướng theo ngày")
 trend = (
@@ -195,11 +199,17 @@ trend = (
     .sort_values("day")
     .set_index("day")
 )
-st.line_chart(trend)
+if len(trend) < 2:
+    # line_chart không vẽ được đường nếu chỉ có 1 điểm — dùng bar_chart thay thế
+    # để vẫn hiện được số, tránh nhìn như "không có gì".
+    st.info("Chỉ có 1 ngày dữ liệu — chọn thêm ngày ở sidebar để xem xu hướng dạng đường.")
+    st.bar_chart(trend)
+else:
+    st.line_chart(trend)
 
 st.subheader("Dữ liệu chi tiết")
 st.caption(
-    "Các cột network_ecpi/roas_ad_dN/retention_rate_dN ở bảng này là số Adjust trả "
+    "Các cột ecpi_all/roas_ad_dN/retention_rate_dN ở bảng này là số Adjust trả "
     "về CHO ĐÚNG DÒNG đó — không cộng dồn/lấy trung bình các cột này qua nhiều dòng "
     "(xem KPI tổng hợp ở trên đã tính đúng cách rồi)."
 )

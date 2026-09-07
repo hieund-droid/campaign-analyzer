@@ -48,8 +48,9 @@ def print_detail_table(data: dict) -> None:
         # cột này qua nhiều dòng, xem giải thích ở print_app_totals_table). ARPU
         # không có metric riêng trên Adjust (đã test trực tiếp: arpu, arpu_ad,
         # arpu_d0, cohort_ad_revenue_d0... đều "Unsupported metric") — tự suy ra từ
-        # ROAS × network_cost ÷ installs. KHÔNG được dùng network_ecpi ở đây vì mẫu
-        # số của network_ecpi là installs do network báo cáo, khác cột "installs".
+        # ROAS × network_cost ÷ installs. KHÔNG được dùng network_ecpi ở đây (cũ) vì
+        # mẫu số của network_ecpi là installs do network báo cáo, khác cột "installs"
+        # — đã đổi CPI sang dùng ecpi_all (cùng cơ sở installs) nên hết vướng.
         for label in ("d0", "d7", "d30"):
             roas_col = f"roas_ad_{label}"
             if roas_col in df.columns and "network_cost" in df.columns and "installs" in df.columns:
@@ -62,7 +63,7 @@ def print_detail_table(data: dict) -> None:
             "country",
             "installs",
             "network_cost",
-            "network_ecpi",
+            "ecpi_all",
             "ad_revenue",
             "roas_ad_d0",
             "arpu_d0",

@@ -46,6 +46,13 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # Tự thêm cột mới nếu đổi/thêm metric sau này (VD ecpi_all thay network_ecpi) —
+    # tránh phải xoá adjust_data.db mỗi lần đổi danh sách metric trong adjust_client.py.
+    existing_cols = {row[1] for row in conn.execute('PRAGMA table_info("adjust_daily")')}
+    for col in VALUE_COLS:
+        if col not in existing_cols:
+            conn.execute(f'ALTER TABLE adjust_daily ADD COLUMN "{col}" REAL')
+
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS pull_log (
@@ -115,16 +122,20 @@ def run() -> None:
         conn.close()
         sys.exit(1)
 
+    warning_msg = ac.extract_warnings(data)  # vd: app_token sai bị Adjust âm thầm bỏ qua
+
     rows = data.get("rows") or []
     count = upsert_rows(conn, rows, fetched_at)
     conn.execute(
         "INSERT INTO pull_log VALUES (?, ?, ?, ?, ?)",
-        (fetched_at, date_range, count, "ok", None),
+        (fetched_at, date_range, count, "ok" if not warning_msg else "warning", warning_msg),
     )
     conn.commit()
     conn.close()
 
     print(f"✅ Đã lưu {count} dòng vào {DB_PATH} (khoảng ngày {date_range}, lúc {fetched_at})")
+    if warning_msg:
+        print(f"⚠️  Adjust cảnh báo: {warning_msg}")
 
 
 if __name__ == "__main__":

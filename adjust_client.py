@@ -18,9 +18,11 @@ ENDPOINT = "https://automate.adjust.com/reports-service/report"
 DETAIL_DIMENSIONS = "app,day,campaign,country"
 
 # Xem GHI_CHU_TIEN_DO.md mục "Các quyết định quan trọng" để biết vì sao chọn
-# từng metric (vd: ad_revenue thay vì revenue, network_ecpi có mẫu số khác installs...).
+# từng metric (vd: ad_revenue thay vì revenue). CPI dùng ecpi_all (= network_cost
+# ÷ installs, CÙNG cơ sở installs với mọi metric khác) — KHÔNG dùng network_ecpi
+# (mẫu số là installs do network đếm, khác cơ sở, đã gây lệch ARPU trước đây).
 METRICS = (
-    "installs,network_cost,network_ecpi,ad_revenue,"
+    "installs,network_cost,ecpi_all,ad_revenue,"
     "roas_ad_d0,roas_ad_d7,roas_ad_d30,"
     "retention_rate_d1,retention_rate_d7"
 )
@@ -37,7 +39,7 @@ UTC_OFFSET = "+07:00"
 # tròn 4 chữ số thập phân mỗi dòng, cộng dồn hàng nghìn dòng nhỏ lẻ sẽ tích lũy sai
 # số vài %, đã kiểm chứng bằng số thật).
 RATIO_COLS = [
-    "network_ecpi",
+    "ecpi_all",
     "roas_ad_d0",
     "roas_ad_d7",
     "roas_ad_d30",

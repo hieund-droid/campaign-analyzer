@@ -200,10 +200,11 @@ trend = (
     .set_index("day")
 )
 if len(trend) < 2:
-    # line_chart không vẽ được đường nếu chỉ có 1 điểm — dùng bar_chart thay thế
-    # để vẫn hiện được số, tránh nhìn như "không có gì".
-    st.info("Chỉ có 1 ngày dữ liệu — chọn thêm ngày ở sidebar để xem xu hướng dạng đường.")
-    st.bar_chart(trend)
+    # Không vẽ biểu đồ với đúng 1 điểm — cả line_chart (không có đường để nối)
+    # lẫn bar_chart (Streamlit/Vega-Lite kéo giãn cột thành mảng phẳng sai hình
+    # khi chỉ có 1 category) đều hiển thị sai. Hiện bảng số thay thế.
+    st.info("Chỉ có 1 ngày dữ liệu — chọn thêm ngày ở sidebar để xem xu hướng dạng biểu đồ.")
+    st.dataframe(trend, width="stretch")
 else:
     st.line_chart(trend)
 

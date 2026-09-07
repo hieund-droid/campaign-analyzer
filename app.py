@@ -2,52 +2,40 @@
 Dashboard Streamlit — xem dữ liệu lõi từ Adjust (installs, CPI, ad revenue,
 ROAS D0/D7/D30, retention D1/D7, ARPU).
 
-App KHÔNG tự gọi Adjust API khi vừa mở — người dùng chọn khoảng ngày rồi bấm nút
-"Kéo dữ liệu" mới gọi (tránh gọi API liên tục mỗi lần đổi bộ lọc/mở lại trang,
-nhất là sau khi từng bị nghi rate limit vì gọi quá nhiều lần). Có cache tạm 15
-phút cho mỗi khoảng ngày đã kéo, để bấm lại nhanh không tốn thêm request.
+MỖI NGƯỜI DÙNG TỰ NHẬP API TOKEN + APP TOKEN CỦA MÌNH ở sidebar khi mở app —
+không dùng chung 1 bộ token trong Secrets, vì mỗi người trong Apero dùng account
+Adjust riêng (cả API Token lẫn App Token đều khác nhau giữa mọi người). Token chỉ
+lưu tạm trong session_state của trình duyệt người đó, không lưu trên server,
+không chia sẻ giữa những người cùng dùng chung link app này.
+
+App KHÔNG tự gọi Adjust API khi vừa mở — người dùng nhập token, chọn khoảng
+ngày, rồi bấm nút "Kéo dữ liệu" mới gọi (tránh gọi API liên tục mỗi lần đổi bộ
+lọc/mở lại trang, nhất là sau khi từng bị nghi rate limit vì gọi quá nhiều lần).
+Có cache tạm 15 phút cho mỗi tổ hợp (token, khoảng ngày) đã kéo.
 
 App không đọc từ adjust_data.db (dù có sẵn) — vì app chạy trên máy chủ Streamlit,
 không đọc được file SQLite nằm trên máy cá nhân — xem GHI_CHU_TIEN_DO.md.
 
-Chạy thử ở máy: streamlit run app.py (cần .env có ADJUST_API_TOKEN, ADJUST_APP_TOKENS).
-Deploy lên Streamlit Cloud: dán 2 biến trên vào mục "Secrets" trên trang Streamlit
-Cloud (KHÔNG đưa vào code/git) — xem README.md.
+Chạy thử ở máy: streamlit run app.py (không cần .env — nhập token trực tiếp trên
+giao diện). Deploy lên Streamlit Cloud: không cần dán Secrets nữa, xem README.md.
 """
-
-import os
 
 import pandas as pd
 import streamlit as st
-from dotenv import load_dotenv
 
 import adjust_client as ac
-
-load_dotenv()  # đọc .env khi chạy local; không ảnh hưởng gì khi deploy trên Cloud
 
 st.set_page_config(page_title="Campaign Analyzer — Adjust", layout="wide")
 
 
-def get_secret(name: str):
-    """Streamlit Cloud: đọc từ st.secrets (đã dán trên trang Cloud).
-    Chạy local: đọc từ biến môi trường (.env)."""
-    try:
-        if name in st.secrets:
-            return st.secrets[name]
-    except Exception:
-        pass
-    return os.getenv(name)
-
-
 @st.cache_data(ttl=15 * 60, show_spinner="Đang lấy dữ liệu từ Adjust...")
-def load_data(days_back: int, app_tokens_raw: str):
-    # QUAN TRỌNG: app_tokens_raw PHẢI là tham số của hàm (không đọc secret ngầm
-    # bên trong) — Streamlit chỉ cache dựa theo tham số truyền vào. Nếu đọc secret
-    # ngầm bên trong hàm, đổi ADJUST_APP_TOKENS trên Secrets sẽ KHÔNG làm cache cũ
-    # mất hiệu lực (đã gặp lỗi thật: thêm app thứ 2 vẫn chỉ thấy app cũ).
-    api_token = get_secret("ADJUST_API_TOKEN")
+def load_data(days_back: int, app_tokens_raw: str, api_token: str):
+    # QUAN TRỌNG: api_token + app_tokens_raw PHẢI là tham số của hàm (không đọc
+    # secret/session ngầm bên trong) — Streamlit chỉ cache dựa theo tham số truyền
+    # vào. Nếu đọc ngầm bên trong hàm, đổi giá trị sẽ KHÔNG làm cache cũ mất hiệu
+    # lực (đã gặp lỗi thật: thêm app thứ 2 vẫn chỉ thấy app cũ).
     if not api_token or not app_tokens_raw:
-        return None, "Thiếu ADJUST_API_TOKEN / ADJUST_APP_TOKENS (xem .env hoặc Secrets trên Streamlit Cloud).", None
+        return None, "Thiếu API Token / ADJUST_APP_TOKENS.", None
 
     app_tokens = ac.parse_app_tokens(app_tokens_raw)
     try:
@@ -110,7 +98,26 @@ def fmt_percent(v):
     return f"{v * 100:.1f}%" if v is not None else "N/A"
 
 
-# ── Sidebar: chọn khoảng ngày, bấm nút mới gọi API ──────────────────
+# ── Sidebar: mỗi người tự nhập token của mình ───────────────────────
+# Mỗi người trong Apero dùng account Adjust riêng (API Token + App Token đều
+# khác nhau giữa các người) — KHÔNG dùng chung 1 bộ token trong Secrets nữa.
+# Token nhập vào đây chỉ nằm trong session_state của TRÌNH DUYỆT người đó, không
+# lưu lại trên server, không ai khác xem được — nhập lại mỗi khi mở app mới.
+st.sidebar.header("Tài khoản Adjust của bạn")
+user_api_token = st.sidebar.text_input(
+    "API Token cá nhân",
+    type="password",
+    help='Adjust → Settings góc dưới trái → Account settings → tab "My profile" → API Token',
+)
+user_app_tokens_raw = st.sidebar.text_input(
+    "App Token (cách nhau bởi dấu phẩy nếu nhiều app)",
+    help='Adjust → mở app → Cài đặt app → "App Token" (~12 ký tự)',
+)
+st.sidebar.caption(
+    "🔒 2 ô trên chỉ lưu tạm trong phiên trình duyệt của bạn, không lưu trên "
+    "server, không chia sẻ với người khác dùng chung app này."
+)
+
 st.sidebar.header("Bộ lọc")
 days_back = st.sidebar.slider("Số ngày gần nhất", min_value=1, max_value=30, value=7)
 fetch_clicked = st.sidebar.button("🔄 Kéo dữ liệu từ Adjust", type="primary")
@@ -124,9 +131,8 @@ if "df" not in st.session_state:
     st.session_state.days_back = None
 
 if fetch_clicked:
-    app_tokens_raw = get_secret("ADJUST_APP_TOKENS")
     st.session_state.df, st.session_state.err, st.session_state.warning_msg = load_data(
-        days_back, app_tokens_raw
+        days_back, user_app_tokens_raw, user_api_token
     )
     st.session_state.days_back = days_back
 

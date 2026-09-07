@@ -167,6 +167,9 @@ def main():
     print(f"Khoảng ngày: {date_range} ...")
 
     detail_data = ac.fetch_detail(api_token, app_tokens)
+    warning_msg = ac.extract_warnings(detail_data)
+    if warning_msg:
+        print(f"\n⚠️  Adjust cảnh báo: {warning_msg}")
     print_detail_table(detail_data)
 
     app_totals_data = ac.fetch_app_totals(api_token, app_tokens)

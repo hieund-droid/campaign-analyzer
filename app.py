@@ -40,27 +40,32 @@ def get_secret(name: str):
 
 
 @st.cache_data(ttl=15 * 60, show_spinner="Đang lấy dữ liệu từ Adjust...")
-def load_data(days_back: int):
+def load_data(days_back: int, app_tokens_raw: str):
+    # QUAN TRỌNG: app_tokens_raw PHẢI là tham số của hàm (không đọc secret ngầm
+    # bên trong) — Streamlit chỉ cache dựa theo tham số truyền vào. Nếu đọc secret
+    # ngầm bên trong hàm, đổi ADJUST_APP_TOKENS trên Secrets sẽ KHÔNG làm cache cũ
+    # mất hiệu lực (đã gặp lỗi thật: thêm app thứ 2 vẫn chỉ thấy app cũ).
     api_token = get_secret("ADJUST_API_TOKEN")
-    app_tokens_raw = get_secret("ADJUST_APP_TOKENS")
     if not api_token or not app_tokens_raw:
-        return None, "Thiếu ADJUST_API_TOKEN / ADJUST_APP_TOKENS (xem .env hoặc Secrets trên Streamlit Cloud)."
+        return None, "Thiếu ADJUST_API_TOKEN / ADJUST_APP_TOKENS (xem .env hoặc Secrets trên Streamlit Cloud).", None
 
     app_tokens = ac.parse_app_tokens(app_tokens_raw)
     try:
         data = ac.fetch_detail(api_token, app_tokens, days_back=days_back, exit_on_error=False)
     except Exception as e:  # noqa: BLE001
-        return None, f"Lỗi gọi Adjust API: {e}"
+        return None, f"Lỗi gọi Adjust API: {e}", None
+
+    warning_msg = ac.extract_warnings(data)
 
     rows = data.get("rows") or []
     if not rows:
-        return pd.DataFrame(), None
+        return pd.DataFrame(), None, warning_msg
 
     df = pd.DataFrame(rows)
     for col in ac.SUMMABLE_COLS + ac.RATIO_COLS:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
-    return df, None
+    return df, None, warning_msg
 
 
 def weighted_kpis(df: pd.DataFrame) -> dict:
@@ -115,20 +120,27 @@ fetch_clicked = st.sidebar.button("🔄 Kéo dữ liệu từ Adjust", type="pri
 if "df" not in st.session_state:
     st.session_state.df = None
     st.session_state.err = None
+    st.session_state.warning_msg = None
     st.session_state.days_back = None
 
 if fetch_clicked:
-    st.session_state.df, st.session_state.err = load_data(days_back)
+    app_tokens_raw = get_secret("ADJUST_APP_TOKENS")
+    st.session_state.df, st.session_state.err, st.session_state.warning_msg = load_data(
+        days_back, app_tokens_raw
+    )
     st.session_state.days_back = days_back
 
 df = st.session_state.df
 err = st.session_state.err
+warning_msg = st.session_state.warning_msg
 
 st.title("📊 Campaign Analyzer — Adjust")
 
 if err:
     st.error(f"❌ {err}")
     st.stop()
+if warning_msg:
+    st.warning(f"⚠️ Adjust cảnh báo: {warning_msg}")
 if df is None:
     st.info("👈 Chọn số ngày ở sidebar rồi bấm **'Kéo dữ liệu từ Adjust'** để bắt đầu.")
     st.stop()

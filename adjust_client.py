@@ -100,6 +100,19 @@ def call_adjust(
     return response.json()
 
 
+def extract_warnings(data: dict) -> str | None:
+    """Adjust KHÔNG báo lỗi (vẫn HTTP 200) nếu 1 trong nhiều app_token bị sai/không
+    tồn tại — nó âm thầm bỏ qua, chỉ trả về app hợp lệ, và giấu thông tin này
+    trong field "data_warnings". Đã gặp thật (07/09/2026): thêm app thứ 2 bị gõ
+    sai token, không có lỗi nào, chỉ thấy thiếu app trên dashboard. PHẢI gọi hàm
+    này sau mỗi lần call_adjust() và hiện cảnh báo ra, không được im lặng bỏ qua.
+    """
+    warnings = data.get("data_warnings") or []
+    if not warnings:
+        return None
+    return " | ".join(w.get("body", w.get("title", str(w))) for w in warnings)
+
+
 def fetch_detail(api_token: str, app_tokens: list, days_back: int = DAYS_BACK_DEFAULT, **kw) -> dict:
     """Bảng chi tiết: theo app + day + campaign + country."""
     return call_adjust(api_token, app_tokens, DETAIL_DIMENSIONS, days_back, **kw)

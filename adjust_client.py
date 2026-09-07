@@ -88,7 +88,7 @@ def call_adjust(
         "utc_offset": UTC_OFFSET,
     }
 
-    response = requests.get(ENDPOINT, headers=headers, params=params, timeout=30)
+    response = requests.get(ENDPOINT, headers=headers, params=params, timeout=60)
 
     if not response.ok:
         msg = f"HTTP {response.status_code} (dimensions={dimensions}): {response.text}"

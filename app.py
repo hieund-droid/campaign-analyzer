@@ -2,10 +2,13 @@
 Dashboard Streamlit — xem dữ liệu lõi từ Adjust (installs, CPI, ad revenue,
 ROAS D0/D7/D30, retention D1/D7, ARPU).
 
-App này TỰ GỌI Adjust API mỗi khi có người mở (không đọc từ adjust_data.db) —
-có cache tạm 15 phút để đỡ gọi liên tục. Lý do chọn kiểu này: khi deploy lên
-Streamlit Community Cloud, app chạy trên máy chủ Streamlit, không đọc được file
-SQLite nằm trên máy cá nhân — xem GHI_CHU_TIEN_DO.md để biết lý do đầy đủ.
+App KHÔNG tự gọi Adjust API khi vừa mở — người dùng chọn khoảng ngày rồi bấm nút
+"Kéo dữ liệu" mới gọi (tránh gọi API liên tục mỗi lần đổi bộ lọc/mở lại trang,
+nhất là sau khi từng bị nghi rate limit vì gọi quá nhiều lần). Có cache tạm 15
+phút cho mỗi khoảng ngày đã kéo, để bấm lại nhanh không tốn thêm request.
+
+App không đọc từ adjust_data.db (dù có sẵn) — vì app chạy trên máy chủ Streamlit,
+không đọc được file SQLite nằm trên máy cá nhân — xem GHI_CHU_TIEN_DO.md.
 
 Chạy thử ở máy: streamlit run app.py (cần .env có ADJUST_API_TOKEN, ADJUST_APP_TOKENS).
 Deploy lên Streamlit Cloud: dán 2 biến trên vào mục "Secrets" trên trang Streamlit
@@ -102,16 +105,34 @@ def fmt_percent(v):
     return f"{v * 100:.1f}%" if v is not None else "N/A"
 
 
-# ── Sidebar: bộ lọc ──────────────────────────────────────────────────
+# ── Sidebar: chọn khoảng ngày, bấm nút mới gọi API ──────────────────
 st.sidebar.header("Bộ lọc")
 days_back = st.sidebar.slider("Số ngày gần nhất", min_value=1, max_value=30, value=7)
+fetch_clicked = st.sidebar.button("🔄 Kéo dữ liệu từ Adjust", type="primary")
 
-df, err = load_data(days_back)
+# Lưu kết quả vào session_state — để đổi bộ lọc app/quốc gia/campaign bên dưới
+# KHÔNG làm gọi lại API (Streamlit chạy lại toàn bộ script mỗi khi đổi widget).
+if "df" not in st.session_state:
+    st.session_state.df = None
+    st.session_state.err = None
+    st.session_state.days_back = None
+
+if fetch_clicked:
+    st.session_state.df, st.session_state.err = load_data(days_back)
+    st.session_state.days_back = days_back
+
+df = st.session_state.df
+err = st.session_state.err
+
+st.title("📊 Campaign Analyzer — Adjust")
 
 if err:
     st.error(f"❌ {err}")
     st.stop()
-if df is None or df.empty:
+if df is None:
+    st.info("👈 Chọn số ngày ở sidebar rồi bấm **'Kéo dữ liệu từ Adjust'** để bắt đầu.")
+    st.stop()
+if df.empty:
     st.warning("⚠️ Không có dữ liệu cho khoảng ngày này.")
     st.stop()
 
@@ -129,10 +150,11 @@ if campaign_search:
     filtered = filtered[filtered["campaign"].str.contains(campaign_search, case=False, na=False)]
 
 # ── Nội dung chính ───────────────────────────────────────────────────
-st.title("📊 Campaign Analyzer — Adjust")
 st.caption(
-    f"Dữ liệu {days_back} ngày gần nhất (tính đến hôm qua), giờ Việt Nam (UTC+7). "
-    "Nguồn: Adjust Report Service API. Chưa gồm AdMob/Meta."
+    f"Dữ liệu {st.session_state.days_back} ngày gần nhất (tính đến hôm qua), giờ "
+    "Việt Nam (UTC+7). Nguồn: Adjust Report Service API. Chưa gồm AdMob/Meta. "
+    "Đổi bộ lọc App/Quốc gia/Campaign bên dưới KHÔNG gọi lại API — chỉ lọc trên "
+    "dữ liệu đã kéo."
 )
 
 if filtered.empty:

@@ -49,13 +49,16 @@ RATIO_COLS = [
 SUMMABLE_COLS = ["installs", "network_cost", "ad_revenue"]
 
 
-def get_date_range(days_back: int = DAYS_BACK_DEFAULT) -> str:
-    """Trả về chuỗi 'YYYY-MM-DD:YYYY-MM-DD' cho N ngày gần nhất, kết thúc là hôm qua.
+def get_date_range(days_back: int = DAYS_BACK_DEFAULT, include_today: bool = False) -> str:
+    """Trả về chuỗi 'YYYY-MM-DD:YYYY-MM-DD' cho N ngày gần nhất.
 
-    Dùng "hôm qua" làm mốc cuối vì số liệu Adjust của ngày hôm nay thường
-    chưa chốt xong (installs/revenue vẫn đang đổ về).
+    Mặc định kết thúc ở "hôm qua" — dùng làm mốc cuối vì số liệu Adjust của ngày
+    hôm nay thường CHƯA CHỐT XONG (installs/revenue vẫn đang đổ về, tăng dần đến
+    hết ngày). include_today=True để lấy cả hôm nay (số "đang chạy", không phải
+    số cuối cùng — chỉ dùng khi cần xem tiến độ trong ngày, không dùng để báo cáo
+    chính thức).
     """
-    end = date.today() - timedelta(days=1)
+    end = date.today() if include_today else date.today() - timedelta(days=1)
     start = end - timedelta(days=days_back - 1)
     return f"{start.isoformat()}:{end.isoformat()}"
 
@@ -73,17 +76,19 @@ def call_adjust(
     dimensions: str,
     days_back: int = DAYS_BACK_DEFAULT,
     exit_on_error: bool = True,
+    include_today: bool = False,
 ) -> dict:
     """Gọi Adjust Report Service API. Trả về dict JSON đã parse.
 
     exit_on_error=True: in lỗi rồi thoát chương trình (dùng cho script chạy tay,
     muốn thấy lỗi ngay). exit_on_error=False: raise exception thay vì thoát (dùng
     cho script chạy nền/lịch tự động, để phần gọi có thể tự xử lý/log lỗi).
+    include_today: xem docstring get_date_range().
     """
     headers = {"Authorization": f"Bearer {api_token}"}
     params = {
         "app_token__in": ",".join(app_tokens),
-        "date_period": get_date_range(days_back),
+        "date_period": get_date_range(days_back, include_today),
         "dimensions": dimensions,
         "metrics": METRICS,
         "ad_spend_mode": AD_SPEND_MODE,

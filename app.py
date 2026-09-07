@@ -29,7 +29,7 @@ st.set_page_config(page_title="Campaign Analyzer — Adjust", layout="wide")
 
 
 @st.cache_data(ttl=15 * 60, show_spinner="Đang lấy dữ liệu từ Adjust...")
-def load_data(days_back: int, app_tokens_raw: str, api_token: str):
+def load_data(days_back: int, app_tokens_raw: str, api_token: str, include_today: bool = False):
     # QUAN TRỌNG: api_token + app_tokens_raw PHẢI là tham số của hàm (không đọc
     # secret/session ngầm bên trong) — Streamlit chỉ cache dựa theo tham số truyền
     # vào. Nếu đọc ngầm bên trong hàm, đổi giá trị sẽ KHÔNG làm cache cũ mất hiệu
@@ -39,7 +39,9 @@ def load_data(days_back: int, app_tokens_raw: str, api_token: str):
 
     app_tokens = ac.parse_app_tokens(app_tokens_raw)
     try:
-        data = ac.fetch_detail(api_token, app_tokens, days_back=days_back, exit_on_error=False)
+        data = ac.fetch_detail(
+            api_token, app_tokens, days_back=days_back, exit_on_error=False, include_today=include_today
+        )
     except Exception as e:  # noqa: BLE001
         return None, f"Lỗi gọi Adjust API: {e}", None
 
@@ -120,6 +122,15 @@ st.sidebar.caption(
 
 st.sidebar.header("Bộ lọc")
 days_back = st.sidebar.slider("Số ngày gần nhất", min_value=1, max_value=30, value=7)
+include_today = st.sidebar.checkbox(
+    "Bao gồm hôm nay",
+    value=False,
+    help=(
+        "Số của hôm nay là số ĐANG CHẠY, chưa chốt xong — sẽ tăng dần đến hết "
+        "ngày, không dùng để báo cáo chính thức. Chỉ bật khi cần xem tiến độ "
+        "trong ngày."
+    ),
+)
 fetch_clicked = st.sidebar.button("🔄 Kéo dữ liệu từ Adjust", type="primary")
 
 # Lưu kết quả vào session_state — để đổi bộ lọc app/quốc gia/campaign bên dưới
@@ -129,12 +140,14 @@ if "df" not in st.session_state:
     st.session_state.err = None
     st.session_state.warning_msg = None
     st.session_state.days_back = None
+    st.session_state.include_today = None
 
 if fetch_clicked:
     st.session_state.df, st.session_state.err, st.session_state.warning_msg = load_data(
-        days_back, user_app_tokens_raw, user_api_token
+        days_back, user_app_tokens_raw, user_api_token, include_today
     )
     st.session_state.days_back = days_back
+    st.session_state.include_today = include_today
 
 df = st.session_state.df
 err = st.session_state.err
@@ -168,12 +181,19 @@ if campaign_search:
     filtered = filtered[filtered["campaign"].str.contains(campaign_search, case=False, na=False)]
 
 # ── Nội dung chính ───────────────────────────────────────────────────
+_moc_cuoi = "hôm nay" if st.session_state.include_today else "hôm qua"
 st.caption(
-    f"Dữ liệu {st.session_state.days_back} ngày gần nhất (tính đến hôm qua), giờ "
-    "Việt Nam (UTC+7). Nguồn: Adjust Report Service API. Chưa gồm AdMob/Meta. "
+    f"Dữ liệu {st.session_state.days_back} ngày gần nhất (tính đến {_moc_cuoi}), "
+    "giờ Việt Nam (UTC+7). Nguồn: Adjust Report Service API. Chưa gồm AdMob/Meta. "
     "Đổi bộ lọc App/Quốc gia/Campaign bên dưới KHÔNG gọi lại API — chỉ lọc trên "
     "dữ liệu đã kéo."
 )
+if st.session_state.include_today:
+    st.warning(
+        "⏱️ Đang bao gồm HÔM NAY — số liệu ngày hôm nay là số ĐANG CHẠY, chưa "
+        "chốt xong, sẽ còn tăng đến hết ngày. Không dùng số hôm nay để báo cáo "
+        "chính thức."
+    )
 
 if filtered.empty:
     st.warning("Không có dòng nào khớp bộ lọc hiện tại.")

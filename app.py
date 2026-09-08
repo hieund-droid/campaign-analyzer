@@ -1,14 +1,18 @@
 """
-Dashboard Streamlit — 2 tab:
+Dashboard Streamlit — sidebar điều hướng 3 mục (lấy cảm hứng từ 1 BI tool nội
+bộ khác của Apero — sidebar tối, bộ lọc ngang + nút Apply, pill chọn dimension):
 1. Adjust: installs, CPI, ad revenue, ROAS D0/D7/D30, retention D1/D7, ARPU.
    MỖI NGƯỜI TỰ NHẬP API Token + App Token của mình (mỗi người dùng account
    Adjust riêng) — không dùng chung Secrets, chỉ lưu tạm trong session của họ.
-2. BigQuery (Meta/TikTok/Google Ads + AdMob): dùng 1 service account key CHUNG
-   cho cả team (đọc từ Secrets khi deploy, hoặc GOOGLE_APPLICATION_CREDENTIALS
-   trong .env khi chạy local) — xem AGENT-BRIEF.md (không commit git) và
-   GHI_CHU_TIEN_DO.md mục "Google Cloud service account key".
+2. BigQuery — Tổng quan: Meta/TikTok/Google Ads theo channel + AdMob theo ad
+   unit/quốc gia. Dùng 1 service account key CHUNG cho cả team (đọc từ Secrets
+   khi deploy, hoặc GOOGLE_APPLICATION_CREDENTIALS trong .env khi chạy local)
+   — xem AGENT-BRIEF.md (không commit git) và GHI_CHU_TIEN_DO.md.
+3. BigQuery — Tự chọn dimension: pivot AdMob linh hoạt (kiểu AdMob console),
+   giới hạn trong 2 metric + 3 dimension mà view BigQuery có.
 
-Cả 2 tab đều KHÔNG tự gọi API khi vừa mở — chọn bộ lọc rồi bấm nút mới gọi.
+Mọi mục đều KHÔNG tự gọi API khi vừa mở — chọn bộ lọc rồi bấm Apply mới gọi.
+Theme màu ở `.streamlit/config.toml` (không chứa gì bí mật, được commit git).
 """
 
 import os
@@ -22,7 +26,7 @@ import bq_client as bq
 
 load_dotenv()  # đọc .env khi chạy local — dùng cho GOOGLE_APPLICATION_CREDENTIALS
 
-st.set_page_config(page_title="Campaign Analyzer", layout="wide")
+st.set_page_config(page_title="Campaign Analyzer", page_icon="📊", layout="wide")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -124,32 +128,43 @@ def get_bq_client():
 def load_bq_data(product_id: str, days_back: int):
     client, err = get_bq_client()
     if err:
-        return None, None, None, None, err
+        return None, None, None, None, None, err
 
     start, end = bq.get_date_range(days_back)
     try:
         by_channel = bq.fetch_campaign_by_channel(client, product_id, start, end)
         campaign_trend = bq.fetch_campaign_trend(client, product_id, start, end)
         by_adunit = bq.fetch_admob_by_adunit(client, product_id, start, end)
+        by_country = bq.fetch_admob_by_country(client, product_id, start, end)
         admob_trend = bq.fetch_admob_trend(client, product_id, start, end)
     except Exception as e:  # noqa: BLE001
-        return None, None, None, None, f"Lỗi query BigQuery: {e}"
+        return None, None, None, None, None, f"Lỗi query BigQuery: {e}"
 
-    return by_channel, campaign_trend, by_adunit, admob_trend, None
+    return by_channel, campaign_trend, by_adunit, by_country, admob_trend, None
 
-
-st.title("📊 Campaign Analyzer")
-tab_adjust, tab_bq = st.tabs(["Adjust", "Meta/TikTok/Google Ads + AdMob (BigQuery)"])
 
 # ══════════════════════════════════════════════════════════════════════
-# TAB 1 — Adjust
+# Sidebar — điều hướng
 # ══════════════════════════════════════════════════════════════════════
-with tab_adjust:
+st.sidebar.markdown("## 📊 Campaign Analyzer")
+PAGES = ["Adjust", "BigQuery — Tổng quan", "BigQuery — Tự chọn dimension"]
+page = st.sidebar.radio("Report", PAGES, label_visibility="collapsed")
+st.sidebar.divider()
+st.sidebar.caption(
+    "Adjust: mỗi người tự nhập token riêng.\n\nBigQuery: dùng chung 1 key của team Data."
+)
+
+st.title(page)
+
+# ══════════════════════════════════════════════════════════════════════
+# PAGE — Adjust
+# ══════════════════════════════════════════════════════════════════════
+if page == "Adjust":
     st.caption(
         "🔒 API Token + App Token chỉ lưu tạm trong phiên trình duyệt của bạn — "
         "mỗi người trong Apero dùng account Adjust riêng, không dùng chung."
     )
-    col1, col2 = st.columns(2)
+    col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
     with col1:
         user_api_token = st.text_input(
             "API Token cá nhân (Adjust)",
@@ -163,18 +178,20 @@ with tab_adjust:
             help='Adjust → mở app → Cài đặt app → "App Token" (~12 ký tự)',
             key="adjust_app_tokens",
         )
-
-    # Preset kiểu Google Analytics — rõ ràng hơn slider + checkbox riêng.
-    ADJUST_DATE_PRESETS = {
-        "Hôm nay (đang chạy, chưa chốt)": (1, True),
-        "Hôm qua": (1, False),
-        "7 ngày qua": (7, False),
-        "14 ngày qua": (14, False),
-        "30 ngày qua": (30, False),
-    }
-    date_choice = st.selectbox("Khoảng ngày", list(ADJUST_DATE_PRESETS.keys()), index=2, key="adjust_date")
-    days_back, include_today = ADJUST_DATE_PRESETS[date_choice]
-    fetch_clicked = st.button("🔄 Kéo dữ liệu từ Adjust", type="primary", key="adjust_fetch")
+    with col3:
+        ADJUST_DATE_PRESETS = {
+            "Hôm nay (đang chạy, chưa chốt)": (1, True),
+            "Hôm qua": (1, False),
+            "7 ngày qua": (7, False),
+            "14 ngày qua": (14, False),
+            "30 ngày qua": (30, False),
+        }
+        date_choice = st.selectbox("Khoảng ngày", list(ADJUST_DATE_PRESETS.keys()), index=2, key="adjust_date")
+        days_back, include_today = ADJUST_DATE_PRESETS[date_choice]
+    with col4:
+        st.write("")
+        st.write("")
+        fetch_clicked = st.button("Apply", type="primary", key="adjust_fetch", width="stretch")
 
     if "adjust_df" not in st.session_state:
         st.session_state.adjust_df = None
@@ -202,7 +219,7 @@ with tab_adjust:
         st.warning(f"⚠️ Adjust cảnh báo: {warning_msg}")
 
     if df is None:
-        st.info("👆 Nhập token, chọn khoảng ngày rồi bấm **'Kéo dữ liệu từ Adjust'** để bắt đầu.")
+        st.info("👆 Nhập token, chọn khoảng ngày rồi bấm **Apply** để bắt đầu.")
     elif df.empty:
         st.warning("⚠️ Không có dữ liệu cho khoảng ngày này.")
     else:
@@ -283,15 +300,15 @@ with tab_adjust:
             st.dataframe(filtered, width="stretch", hide_index=True)
 
 # ══════════════════════════════════════════════════════════════════════
-# TAB 2 — BigQuery (Meta/TikTok/Google Ads + AdMob)
+# PAGE — BigQuery Tổng quan
 # ══════════════════════════════════════════════════════════════════════
-with tab_bq:
+elif page == "BigQuery — Tổng quan":
     st.caption(
         "🔑 Dùng 1 key BigQuery dùng CHUNG cho cả team (không phải cá nhân như Adjust) — "
         "đã cấu hình sẵn, không cần nhập gì thêm."
     )
 
-    bcol1, bcol2 = st.columns(2)
+    bcol1, bcol2, bcol3 = st.columns([2, 2, 1])
     with bcol1:
         product_id = st.selectbox("App (product_id)", bq.KNOWN_PRODUCT_IDS, key="bq_product")
     with bcol2:
@@ -301,13 +318,16 @@ with tab_bq:
             help="Dữ liệu này KHÔNG có 'hôm nay' — ngày mới nhất luôn là hôm qua (theo AGENT-BRIEF.md).",
         )
         bq_days_back = BQ_DATE_PRESETS[bq_date_choice]
-
-    bq_fetch_clicked = st.button("🔄 Kéo dữ liệu từ BigQuery", type="primary", key="bq_fetch")
+    with bcol3:
+        st.write("")
+        st.write("")
+        bq_fetch_clicked = st.button("Apply", type="primary", key="bq_fetch", width="stretch")
 
     if "bq_by_channel" not in st.session_state:
         st.session_state.bq_by_channel = None
         st.session_state.bq_campaign_trend = None
         st.session_state.bq_by_adunit = None
+        st.session_state.bq_by_country = None
         st.session_state.bq_admob_trend = None
         st.session_state.bq_err = None
         st.session_state.bq_product_shown = None
@@ -318,6 +338,7 @@ with tab_bq:
             st.session_state.bq_by_channel,
             st.session_state.bq_campaign_trend,
             st.session_state.bq_by_adunit,
+            st.session_state.bq_by_country,
             st.session_state.bq_admob_trend,
             st.session_state.bq_err,
         ) = load_bq_data(product_id, bq_days_back)
@@ -327,7 +348,7 @@ with tab_bq:
     if st.session_state.bq_err:
         st.error(f"❌ {st.session_state.bq_err}")
     elif st.session_state.bq_by_channel is None:
-        st.info("👆 Chọn app + khoảng ngày rồi bấm **'Kéo dữ liệu từ BigQuery'** để bắt đầu.")
+        st.info("👆 Chọn app + khoảng ngày rồi bấm **Apply** để bắt đầu.")
     else:
         st.caption(
             f"App: **{st.session_state.bq_product_shown}** · Khoảng ngày: "
@@ -356,12 +377,22 @@ with tab_bq:
         elif campaign_trend is not None and not campaign_trend.empty:
             st.dataframe(campaign_trend, width="stretch", hide_index=True)
 
-        st.subheader("AdMob — eCPM theo ad unit (blended, weighted theo impressions)")
-        by_adunit = st.session_state.bq_by_adunit
-        if by_adunit.empty:
-            st.warning("Không có dữ liệu AdMob nào trong khoảng ngày này.")
-        else:
-            st.dataframe(by_adunit, width="stretch", hide_index=True)
+        adcol1, adcol2 = st.columns(2)
+        with adcol1:
+            st.subheader("AdMob — eCPM theo ad unit")
+            by_adunit = st.session_state.bq_by_adunit
+            if by_adunit.empty:
+                st.warning("Không có dữ liệu AdMob nào trong khoảng ngày này.")
+            else:
+                st.dataframe(by_adunit, width="stretch", hide_index=True)
+        with adcol2:
+            st.subheader("AdMob — eCPM theo thị trường (quốc gia)")
+            by_country = st.session_state.bq_by_country
+            if by_country.empty:
+                st.warning("Không có dữ liệu AdMob nào trong khoảng ngày này.")
+            else:
+                st.dataframe(by_country, width="stretch", hide_index=True)
+        st.caption("eCPM đều là số blended, weighted theo impressions (AGENT-BRIEF.md Rule 1) — không phải trung bình đơn giản.")
 
         admob_trend = st.session_state.bq_admob_trend
         if admob_trend is not None and len(admob_trend) >= 2:
@@ -373,5 +404,75 @@ with tab_bq:
             "Lưu ý (theo AGENT-BRIEF.md): 2 bảng trên KHÔNG nối được với nhau ở mức "
             "campaign/ad-unit — chỉ nối được ở mức country×ngày, và impressions AdMob "
             "đến từ TOÀN BỘ user active, không riêng user do campaign này mang về. "
-            "Không có Revenue/ROAS/Retention trong nguồn này — dùng tab Adjust cho phần đó."
+            "Không có Revenue/ROAS/Retention trong nguồn này — dùng mục Adjust cho phần đó."
         )
+
+# ══════════════════════════════════════════════════════════════════════
+# PAGE — BigQuery Tự chọn dimension (kiểu AdMob console)
+# ══════════════════════════════════════════════════════════════════════
+else:
+    st.caption(
+        "🔑 Dùng chung key BigQuery của team. Chỉ có 2 chỉ số (impressions, eCPM "
+        "blended) và 3 dimension (quốc gia/ad unit/định dạng) — KHÔNG có Estimated "
+        "earnings/Match rate/Network requests/CTR/Clicks/Show Rate vì view BigQuery "
+        "đang dùng không chứa các số đó (muốn đủ như console AdMob thật, cần nối "
+        "thẳng AdMob API, chưa làm)."
+    )
+
+    fcol1, fcol2, fcol3 = st.columns([2, 2, 1])
+    with fcol1:
+        flex_product_id = st.selectbox("App (product_id)", bq.KNOWN_PRODUCT_IDS, key="bq_flex_product")
+    with fcol2:
+        FLEX_DATE_PRESETS = {"Hôm qua": 1, "7 ngày qua": 7, "14 ngày qua": 14, "30 ngày qua": 30}
+        flex_date_choice = st.selectbox(
+            "Khoảng ngày", list(FLEX_DATE_PRESETS.keys()), index=1, key="bq_flex_date"
+        )
+        flex_days_back = FLEX_DATE_PRESETS[flex_date_choice]
+    with fcol3:
+        st.write("")
+        st.write("")
+
+    st.markdown("**Dimensions** (bấm chọn, chọn được nhiều)")
+    DIMENSION_LABELS = {"country": "Quốc gia", "ad_unit": "Ad unit", "ad_format": "Định dạng"}
+    flex_dims_labels = st.pills(
+        "Dimensions", list(DIMENSION_LABELS.values()), selection_mode="multi",
+        key="bq_flex_dims", label_visibility="collapsed",
+    )
+    flex_dims = [k for k, v in DIMENSION_LABELS.items() if v in (flex_dims_labels or [])]
+
+    st.markdown("**Mốc thời gian** (chọn 1)")
+    TIME_LABELS = {"Theo ngày": "day", "Theo tuần": "week", "Theo tháng": "month", "Gộp cả khoảng": None}
+    flex_time_label = st.pills(
+        "Mốc thời gian", list(TIME_LABELS.keys()), selection_mode="single",
+        default="Theo ngày", key="bq_flex_time", label_visibility="collapsed",
+    )
+    flex_time = TIME_LABELS.get(flex_time_label, "day")
+
+    flex_fetch_clicked = st.button("Apply", type="primary", key="bq_flex_fetch")
+
+    if "bq_flex_df" not in st.session_state:
+        st.session_state.bq_flex_df = None
+        st.session_state.bq_flex_err = None
+
+    if flex_fetch_clicked:
+        client, cerr = get_bq_client()
+        if cerr:
+            st.session_state.bq_flex_df, st.session_state.bq_flex_err = None, cerr
+        else:
+            start, end = bq.get_date_range(flex_days_back)
+            try:
+                st.session_state.bq_flex_df = bq.fetch_admob_flexible(
+                    client, flex_product_id, start, end, flex_dims, flex_time
+                )
+                st.session_state.bq_flex_err = None
+            except Exception as e:  # noqa: BLE001
+                st.session_state.bq_flex_df, st.session_state.bq_flex_err = None, f"Lỗi query: {e}"
+
+    if st.session_state.bq_flex_err:
+        st.error(f"❌ {st.session_state.bq_flex_err}")
+    elif st.session_state.bq_flex_df is None:
+        st.info("👆 Chọn dimension + mốc thời gian rồi bấm **Apply** để bắt đầu.")
+    elif st.session_state.bq_flex_df.empty:
+        st.warning("Không có dữ liệu cho tổ hợp này.")
+    else:
+        st.dataframe(st.session_state.bq_flex_df, width="stretch", hide_index=True)

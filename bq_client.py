@@ -143,6 +143,92 @@ def fetch_admob_by_adunit(client: bigquery.Client, product_id: str, start: date,
     return client.query(sql, job_config=job_config).to_dataframe()
 
 
+def fetch_admob_by_country(client: bigquery.Client, product_id: str, start: date, end: date):
+    """eCPM blended theo QUỐC GIA (thị trường) — weighted theo impressions, cùng
+    công thức với fetch_admob_by_adunit. Cột country có sẵn trong view (brief §1.B)."""
+    sql = f"""
+        SELECT
+            country,
+            SUM(impressions) AS impressions,
+            SAFE_DIVIDE(SUM(ecpm * impressions), NULLIF(SUM(impressions), 0)) AS ecpm_blended
+        FROM {VIEW_ADMOB}
+        WHERE product_id = @product_id AND day BETWEEN @start AND @end
+        GROUP BY country
+        ORDER BY impressions DESC
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("product_id", "STRING", product_id),
+            bigquery.ScalarQueryParameter("start", "DATE", start),
+            bigquery.ScalarQueryParameter("end", "DATE", end),
+        ]
+    )
+    return client.query(sql, job_config=job_config).to_dataframe()
+
+
+# Dimension AdMob cho phép người dùng TỰ CHỌN để pivot (giống kiểu AdMob console,
+# nhưng CHỈ trong phạm vi cột view này có — KHÔNG có ad_source/app_version/platform/
+# earnings/match_rate/clicks/show_rate như console thật, vì view chỉ có 2 metric
+# impressions+ecpm và 4 dimension country/ad_unit/ad_format/day).
+ADMOB_DIMENSIONS = ["country", "ad_unit", "ad_format"]
+
+
+def fetch_admob_flexible(
+    client: bigquery.Client,
+    product_id: str,
+    start: date,
+    end: date,
+    dimensions: list,
+    time_granularity: str | None = "day",
+):
+    """Query linh hoạt AdMob — tự chọn tổ hợp dimension + mốc thời gian.
+
+    dimensions: tập con của ADMOB_DIMENSIONS (country/ad_unit/ad_format).
+    time_granularity: "day" | "week" | "month" | None (None = gộp cả khoảng
+    ngày thành 1 dòng, không chia theo thời gian).
+    """
+    for d in dimensions:
+        if d not in ADMOB_DIMENSIONS:
+            raise ValueError(f"Dimension không hợp lệ: {d}")
+
+    select_cols = []
+    group_cols = []
+    if time_granularity == "day":
+        select_cols.append("day")
+        group_cols.append("day")
+    elif time_granularity == "week":
+        select_cols.append("DATE_TRUNC(day, WEEK(MONDAY)) AS week")
+        group_cols.append("week")
+    elif time_granularity == "month":
+        select_cols.append("FORMAT_DATE('%Y-%m', day) AS month")
+        group_cols.append("month")
+
+    for d in dimensions:
+        select_cols.append(d)
+        group_cols.append(d)
+
+    select_prefix = (",\n            ".join(select_cols) + ",\n            ") if select_cols else ""
+    group_clause = f"GROUP BY {', '.join(group_cols)}" if group_cols else ""
+
+    sql = f"""
+        SELECT
+            {select_prefix}SUM(impressions) AS impressions,
+            SAFE_DIVIDE(SUM(ecpm * impressions), NULLIF(SUM(impressions), 0)) AS ecpm_blended
+        FROM {VIEW_ADMOB}
+        WHERE product_id = @product_id AND day BETWEEN @start AND @end
+        {group_clause}
+        ORDER BY impressions DESC
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("product_id", "STRING", product_id),
+            bigquery.ScalarQueryParameter("start", "DATE", start),
+            bigquery.ScalarQueryParameter("end", "DATE", end),
+        ]
+    )
+    return client.query(sql, job_config=job_config).to_dataframe()
+
+
 def fetch_admob_trend(client: bigquery.Client, product_id: str, start: date, end: date):
     sql = f"""
         SELECT

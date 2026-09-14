@@ -1,20 +1,23 @@
 """
-Dashboard Streamlit — sidebar điều hướng 3 mục (lấy cảm hứng từ 1 BI tool nội
-bộ khác của Apero — sidebar tối, bộ lọc ngang + nút Apply, pill chọn dimension):
-1. Adjust: installs, CPI, ad revenue, ROAS D0/D7/D30, retention D1/D7, ARPU.
-   MỖI NGƯỜI TỰ NHẬP API Token + App Token của mình (mỗi người dùng account
-   Adjust riêng) — không dùng chung Secrets, chỉ lưu tạm trong session của họ.
-2. BigQuery — Tổng quan: Meta/TikTok/Google Ads theo channel + AdMob theo ad
-   unit/quốc gia. Dùng 1 service account key CHUNG cho cả team (đọc từ Secrets
-   khi deploy, hoặc GOOGLE_APPLICATION_CREDENTIALS trong .env khi chạy local)
-   — xem AGENT-BRIEF.md (không commit git) và GHI_CHU_TIEN_DO.md.
-3. BigQuery — Tự chọn dimension: pivot AdMob linh hoạt (kiểu AdMob console),
-   giới hạn trong 2 metric + 3 dimension mà view BigQuery có.
-4. Bảng điểm thị trường: eCPM từng quốc gia so với benchmark tự nhập cho từng
-   app (màu 🟢/🔴) + sparkline xu hướng — xem `benchmarks.py` về nơi lưu
-   benchmark và giới hạn (có thể mất khi Streamlit Cloud redeploy/ngủ dậy).
+Dashboard Streamlit — điều hướng bằng `st.navigation()` (API điều hướng GỐC của
+Streamlit, không tự chế bằng radio nữa) — cho icon + nhóm danh mục kiểu 1 BI
+tool nội bộ khác của Apero. Việc thu/mở cả sidebar là tính năng có sẵn của
+Streamlit (không phải do code này), phần code cải thiện là icon + nhóm mục.
 
-Mọi mục đều KHÔNG tự gọi API khi vừa mở — chọn bộ lọc rồi bấm Apply mới gọi.
+4 trang, nhóm theo 2 danh mục:
+- "Adjust": installs, CPI, ad revenue, ROAS D0/D7/D30, retention D1/D7, ARPU.
+  MỖI NGƯỜI TỰ NHẬP API Token + App Token của mình (mỗi người dùng account
+  Adjust riêng) — không dùng chung Secrets, chỉ lưu tạm trong session của họ.
+- "BigQuery": Tổng quan (Meta/TikTok/Google Ads theo channel + AdMob theo ad
+  unit/quốc gia) + Tự chọn dimension (pivot AdMob linh hoạt kiểu AdMob console,
+  giới hạn trong 2 metric + 3 dimension mà view BigQuery có). Dùng 1 service
+  account key CHUNG cho cả team (đọc từ Secrets khi deploy, hoặc
+  GOOGLE_APPLICATION_CREDENTIALS trong .env khi chạy local) — xem
+  AGENT-BRIEF.md (không commit git) và GHI_CHU_TIEN_DO.md.
+- "Thị trường": Bảng điểm thị trường — eCPM từng quốc gia so với benchmark tự
+  nhập cho từng app (màu 🟢/🔴) + sparkline xu hướng — xem `benchmarks.py`.
+
+Mọi trang đều KHÔNG tự gọi API khi vừa mở — chọn bộ lọc rồi bấm Apply mới gọi.
 Theme màu ở `.streamlit/config.toml` (không chứa gì bí mật, được commit git).
 """
 
@@ -149,22 +152,10 @@ def load_bq_data(product_id: str, days_back: int):
 
 
 # ══════════════════════════════════════════════════════════════════════
-# Sidebar — điều hướng
+# TRANG — Adjust
 # ══════════════════════════════════════════════════════════════════════
-st.sidebar.markdown("## 📊 Campaign Analyzer")
-PAGES = ["Adjust", "BigQuery — Tổng quan", "BigQuery — Tự chọn dimension", "Bảng điểm thị trường"]
-page = st.sidebar.radio("Report", PAGES, label_visibility="collapsed")
-st.sidebar.divider()
-st.sidebar.caption(
-    "Adjust: mỗi người tự nhập token riêng.\n\nBigQuery: dùng chung 1 key của team Data."
-)
-
-st.title(page)
-
-# ══════════════════════════════════════════════════════════════════════
-# PAGE — Adjust
-# ══════════════════════════════════════════════════════════════════════
-if page == "Adjust":
+def page_adjust():
+    st.title("Adjust")
     st.caption(
         "🔒 API Token + App Token chỉ lưu tạm trong phiên trình duyệt của bạn — "
         "mỗi người trong Apero dùng account Adjust riêng, không dùng chung."
@@ -304,10 +295,12 @@ if page == "Adjust":
             )
             st.dataframe(filtered, width="stretch", hide_index=True)
 
+
 # ══════════════════════════════════════════════════════════════════════
-# PAGE — BigQuery Tổng quan
+# TRANG — BigQuery Tổng quan
 # ══════════════════════════════════════════════════════════════════════
-elif page == "BigQuery — Tổng quan":
+def page_bq_overview():
+    st.title("BigQuery — Tổng quan")
     st.caption(
         "🔑 Dùng 1 key BigQuery dùng CHUNG cho cả team (không phải cá nhân như Adjust) — "
         "đã cấu hình sẵn, không cần nhập gì thêm."
@@ -420,10 +413,12 @@ elif page == "BigQuery — Tổng quan":
             "Không có Revenue/ROAS/Retention trong nguồn này — dùng mục Adjust cho phần đó."
         )
 
+
 # ══════════════════════════════════════════════════════════════════════
-# PAGE — BigQuery Tự chọn dimension (kiểu AdMob console)
+# TRANG — BigQuery Tự chọn dimension (kiểu AdMob console)
 # ══════════════════════════════════════════════════════════════════════
-elif page == "BigQuery — Tự chọn dimension":
+def page_bq_flexible():
+    st.title("BigQuery — Tự chọn dimension")
     st.caption(
         "🔑 Dùng chung key BigQuery của team. Chỉ có 2 chỉ số (impressions, eCPM "
         "blended) và 3 dimension (quốc gia/ad unit/định dạng) — KHÔNG có Estimated "
@@ -490,10 +485,12 @@ elif page == "BigQuery — Tự chọn dimension":
     else:
         st.dataframe(st.session_state.bq_flex_df, width="stretch", hide_index=True)
 
+
 # ══════════════════════════════════════════════════════════════════════
-# PAGE — Bảng điểm thị trường (eCPM vs benchmark theo quốc gia)
+# TRANG — Bảng điểm thị trường (eCPM vs benchmark theo quốc gia)
 # ══════════════════════════════════════════════════════════════════════
-else:
+def page_market_scorecard():
+    st.title("Bảng điểm thị trường")
     st.caption(
         "🔑 Dùng chung key BigQuery của team. eCPM từng quốc gia so với benchmark "
         "bạn tự đặt **CHO TỪNG QUỐC GIA** (không dùng chung 1 mốc cho cả app, vì "
@@ -586,149 +583,173 @@ else:
 
         if not country_rows:
             st.warning("Không có quốc gia nào có dữ liệu trong khoảng ngày này.")
+            return
+
+        st.markdown("**Lọc/chọn quốc gia** (để trống ô chọn quốc gia = dùng mặc định top theo doanh thu)")
+        fcol1, fcol2, fcol3 = st.columns(3)
+        with fcol1:
+            mkt_regions = st.multiselect("Vùng", cmeta.ALL_REGIONS, key="mkt_regions")
+        with fcol2:
+            mkt_tiers = st.multiselect("Tier", cmeta.ALL_TIERS, key="mkt_tiers")
+
+        filtered_rows = country_rows
+        if mkt_regions:
+            filtered_rows = [r for r in filtered_rows if cmeta.get_region(r["country"]) in mkt_regions]
+        if mkt_tiers:
+            filtered_rows = [r for r in filtered_rows if cmeta.get_tier(r["country"]) in mkt_tiers]
+
+        with fcol3:
+            # Danh sách sắp theo IMPRESSIONS giảm dần — proxy cho "lượng
+            # user" (nguồn AdMob này không có số user thực, impressions là
+            # số gần nhất đang có sẵn) — để chọn lẻ từng nước dễ hơn thay vì
+            # danh sách xếp theo bảng chữ cái.
+            candidates_sorted = sorted(filtered_rows, key=lambda r: r["impressions"], reverse=True)
+            mkt_countries_picked = st.multiselect(
+                "Quốc gia cụ thể (sắp theo lượng impressions — proxy lượng "
+                "user — nhiều nhất lên đầu)",
+                [r["country"] for r in candidates_sorted],
+                key="mkt_countries",
+            )
+
+        if not filtered_rows:
+            st.warning("Không có quốc gia nào trong bộ lọc Vùng/Tier này.")
+            return
+        elif mkt_countries_picked:
+            # Đã tự chọn quốc gia cụ thể → hiện ĐÚNG các nước đó theo ĐÚNG
+            # thứ tự đã chọn (không giới hạn top N).
+            by_country = {r["country"]: r for r in filtered_rows}
+            top_countries = [by_country[c] for c in mkt_countries_picked if c in by_country]
         else:
-            st.markdown("**Lọc/chọn quốc gia** (để trống ô chọn quốc gia = dùng mặc định top theo doanh thu)")
-            fcol1, fcol2, fcol3 = st.columns(3)
-            with fcol1:
-                mkt_regions = st.multiselect("Vùng", cmeta.ALL_REGIONS, key="mkt_regions")
-            with fcol2:
-                mkt_tiers = st.multiselect("Tier", cmeta.ALL_TIERS, key="mkt_tiers")
+            # Mặc định: top N theo DOANH THU cao nhất (không phải impressions).
+            top_countries = sorted(
+                filtered_rows, key=lambda r: r["revenue_implied"], reverse=True
+            )[: int(mkt_top_n)]
 
-            filtered_rows = country_rows
-            if mkt_regions:
-                filtered_rows = [r for r in filtered_rows if cmeta.get_region(r["country"]) in mkt_regions]
-            if mkt_tiers:
-                filtered_rows = [r for r in filtered_rows if cmeta.get_tier(r["country"]) in mkt_tiers]
+        if not top_countries:
+            return
 
-            with fcol3:
-                # Danh sách sắp theo IMPRESSIONS giảm dần — proxy cho "lượng
-                # user" (nguồn AdMob này không có số user thực, impressions là
-                # số gần nhất đang có sẵn) — để chọn lẻ từng nước dễ hơn thay vì
-                # danh sách xếp theo bảng chữ cái.
-                candidates_sorted = sorted(filtered_rows, key=lambda r: r["impressions"], reverse=True)
-                mkt_countries_picked = st.multiselect(
-                    "Quốc gia cụ thể (sắp theo lượng impressions — proxy lượng "
-                    "user — nhiều nhất lên đầu)",
-                    [r["country"] for r in candidates_sorted],
-                    key="mkt_countries",
-                )
-
-            if not filtered_rows:
-                st.warning("Không có quốc gia nào trong bộ lọc Vùng/Tier này.")
-                top_countries = []
-            elif mkt_countries_picked:
-                # Đã tự chọn quốc gia cụ thể → hiện ĐÚNG các nước đó theo ĐÚNG
-                # thứ tự đã chọn (không giới hạn top N).
-                by_country = {r["country"]: r for r in filtered_rows}
-                top_countries = [by_country[c] for c in mkt_countries_picked if c in by_country]
-            else:
-                # Mặc định: top N theo DOANH THU cao nhất (không phải impressions).
-                top_countries = sorted(
-                    filtered_rows, key=lambda r: r["revenue_implied"], reverse=True
-                )[: int(mkt_top_n)]
-
-        if country_rows and top_countries:
-            saved = bm.get_product_benchmarks(shown_product_id)
-            # Key đổi theo ĐÚNG tập quốc gia đang hiện — đổi vùng/tier/chọn tay
-            # sẽ tự build lại bảng benchmark đúng danh sách mới, không giữ bảng cũ.
-            countries_signature = ",".join(sorted(r["country"] for r in top_countries))
-            editor_key = f"mkt_bench_editor_{shown_product_id}_{hash(countries_signature)}"
-            if editor_key not in st.session_state:
-                bench_rows = [
-                    {
-                        "Quốc gia": r["country"],
-                        "Impressions": r["impressions"],
-                        "eCPM hiện tại": round(r["current_ecpm"], 4) if r["current_ecpm"] is not None else None,
-                        # Chưa lưu benchmark cho nước này lần nào → mặc định = eCPM
-                        # hiện tại (ra 0% lệch ban đầu), tự sửa lại theo mức muốn.
-                        "Benchmark ($)": round(saved.get(r["country"], r["current_ecpm"] or 0.0), 4),
-                    }
-                    for r in top_countries
-                ]
-                st.session_state[editor_key] = pd.DataFrame(bench_rows)
-
-            st.markdown(
-                "**Đặt benchmark riêng cho từng quốc gia** — mặc định = eCPM hiện tại "
-                "(chưa từng lưu thì % so với benchmark sẽ ra 0%), sửa lại theo mức bạn "
-                "muốn coi là \"đạt\" cho từng nước, rồi bấm Lưu."
-            )
-            edited = st.data_editor(
-                st.session_state[editor_key],
-                key=f"{editor_key}_widget",
-                hide_index=True,
-                width="stretch",
-                disabled=["Quốc gia", "Impressions", "eCPM hiện tại"],
-                column_config={
-                    "eCPM hiện tại": st.column_config.NumberColumn(format="$%.4f"),
-                    "Benchmark ($)": st.column_config.NumberColumn(format="$%.4f", min_value=0.0, step=0.01),
-                },
-            )
-            st.session_state[editor_key] = edited
-
-            if st.button("💾 Lưu benchmark cho từng quốc gia", key="mkt_save_benchmark"):
-                new_map = dict(zip(edited["Quốc gia"], edited["Benchmark ($)"]))
-                bm.save_product_benchmarks(shown_product_id, new_map)
-                st.success(f"Đã lưu benchmark cho {len(new_map)} quốc gia của {shown_product_id}.")
-
-            # Dùng benchmark ĐANG HIỆN trên bảng sửa (kể cả chưa bấm Lưu) để tính
-            # bảng điểm bên dưới — cho xem thử trước khi quyết định lưu lại.
-            benchmark_lookup = dict(zip(edited["Quốc gia"], edited["Benchmark ($)"]))
-
-            scorecard_rows = []
-            for r in top_countries:
-                country = r["country"]
-                current_ecpm = r["current_ecpm"]
-                benchmark_val = benchmark_lookup.get(country)
-                pct_vs_bench = (
-                    (current_ecpm - benchmark_val) / benchmark_val * 100
-                    if current_ecpm is not None and benchmark_val else None
-                )
-                scorecard_rows.append({
-                    "Quốc gia": country,
-                    "Vùng": cmeta.get_region(country),
-                    "Tier": cmeta.get_tier(country),
+        saved = bm.get_product_benchmarks(shown_product_id)
+        # Key đổi theo ĐÚNG tập quốc gia đang hiện — đổi vùng/tier/chọn tay
+        # sẽ tự build lại bảng benchmark đúng danh sách mới, không giữ bảng cũ.
+        countries_signature = ",".join(sorted(r["country"] for r in top_countries))
+        editor_key = f"mkt_bench_editor_{shown_product_id}_{hash(countries_signature)}"
+        if editor_key not in st.session_state:
+            bench_rows = [
+                {
+                    "Quốc gia": r["country"],
                     "Impressions": r["impressions"],
-                    "eCPM hiện tại (TB 7 ngày gần nhất)": round(current_ecpm, 4) if current_ecpm is not None else None,
-                    "Benchmark": round(benchmark_val, 4) if benchmark_val is not None else None,
-                    "% so với benchmark": round(pct_vs_bench, 1) if pct_vs_bench is not None else None,
-                    "Trạng thái": (
-                        ("🟢" if current_ecpm >= benchmark_val else "🔴")
-                        if current_ecpm is not None and benchmark_val is not None else "⚪"
-                    ),
-                    "Xu hướng eCPM": r["trend"],
-                })
+                    "eCPM hiện tại": round(r["current_ecpm"], 4) if r["current_ecpm"] is not None else None,
+                    # Chưa lưu benchmark cho nước này lần nào → mặc định = eCPM
+                    # hiện tại (ra 0% lệch ban đầu), tự sửa lại theo mức muốn.
+                    "Benchmark ($)": round(saved.get(r["country"], r["current_ecpm"] or 0.0), 4),
+                }
+                for r in top_countries
+            ]
+            st.session_state[editor_key] = pd.DataFrame(bench_rows)
 
-            summary_df = (
-                pd.DataFrame(scorecard_rows)
-                .sort_values("% so với benchmark")  # thị trường tệ nhất (so với benchmark của chính nó) lên đầu
-                .reset_index(drop=True)
-            )
+        st.markdown(
+            "**Đặt benchmark riêng cho từng quốc gia** — mặc định = eCPM hiện tại "
+            "(chưa từng lưu thì % so với benchmark sẽ ra 0%), sửa lại theo mức bạn "
+            "muốn coi là \"đạt\" cho từng nước, rồi bấm Lưu."
+        )
+        edited = st.data_editor(
+            st.session_state[editor_key],
+            key=f"{editor_key}_widget",
+            hide_index=True,
+            width="stretch",
+            disabled=["Quốc gia", "Impressions", "eCPM hiện tại"],
+            column_config={
+                "eCPM hiện tại": st.column_config.NumberColumn(format="$%.4f"),
+                "Benchmark ($)": st.column_config.NumberColumn(format="$%.4f", min_value=0.0, step=0.01),
+            },
+        )
+        st.session_state[editor_key] = edited
 
-            st.divider()
-            st.subheader("Bảng điểm thị trường")
-            _selection_desc = (
-                f"{len(top_countries)} quốc gia tự chọn"
-                if mkt_countries_picked
-                else f"top {len(summary_df)} theo doanh thu"
+        if st.button("💾 Lưu benchmark cho từng quốc gia", key="mkt_save_benchmark"):
+            new_map = dict(zip(edited["Quốc gia"], edited["Benchmark ($)"]))
+            bm.save_product_benchmarks(shown_product_id, new_map)
+            st.success(f"Đã lưu benchmark cho {len(new_map)} quốc gia của {shown_product_id}.")
+
+        # Dùng benchmark ĐANG HIỆN trên bảng sửa (kể cả chưa bấm Lưu) để tính
+        # bảng điểm bên dưới — cho xem thử trước khi quyết định lưu lại.
+        benchmark_lookup = dict(zip(edited["Quốc gia"], edited["Benchmark ($)"]))
+
+        scorecard_rows = []
+        for r in top_countries:
+            country = r["country"]
+            current_ecpm = r["current_ecpm"]
+            benchmark_val = benchmark_lookup.get(country)
+            pct_vs_bench = (
+                (current_ecpm - benchmark_val) / benchmark_val * 100
+                if current_ecpm is not None and benchmark_val else None
             )
-            st.caption(
-                f"App: **{shown_product_id}** · {_selection_desc} · sắp xếp: thấp hơn "
-                "benchmark (của chính nước đó) nhiều nhất lên đầu."
-            )
-            st.dataframe(
-                summary_df,
-                width="stretch",
-                hide_index=True,
-                column_config={
-                    "eCPM hiện tại (TB 7 ngày gần nhất)": st.column_config.NumberColumn(format="$%.4f"),
-                    "Benchmark": st.column_config.NumberColumn(format="$%.4f"),
-                    "% so với benchmark": st.column_config.NumberColumn(format="%.1f%%"),
-                    "Xu hướng eCPM": st.column_config.LineChartColumn(
-                        "Xu hướng eCPM", help="eCPM blended theo từng ngày trong khoảng đã chọn"
-                    ),
-                },
-            )
-            st.caption(
-                "eCPM hiện tại = blended (weighted theo impressions) của 7 ngày gần nhất "
-                "trong khoảng đã chọn — không phải trung bình đơn giản."
-            )
+            scorecard_rows.append({
+                "Quốc gia": country,
+                "Vùng": cmeta.get_region(country),
+                "Tier": cmeta.get_tier(country),
+                "Impressions": r["impressions"],
+                "eCPM hiện tại (TB 7 ngày gần nhất)": round(current_ecpm, 4) if current_ecpm is not None else None,
+                "Benchmark": round(benchmark_val, 4) if benchmark_val is not None else None,
+                "% so với benchmark": round(pct_vs_bench, 1) if pct_vs_bench is not None else None,
+                "Trạng thái": (
+                    ("🟢" if current_ecpm >= benchmark_val else "🔴")
+                    if current_ecpm is not None and benchmark_val is not None else "⚪"
+                ),
+                "Xu hướng eCPM": r["trend"],
+            })
+
+        summary_df = (
+            pd.DataFrame(scorecard_rows)
+            .sort_values("% so với benchmark")  # thị trường tệ nhất (so với benchmark của chính nó) lên đầu
+            .reset_index(drop=True)
+        )
+
+        st.divider()
+        st.subheader("Bảng điểm thị trường")
+        _selection_desc = (
+            f"{len(top_countries)} quốc gia tự chọn"
+            if mkt_countries_picked
+            else f"top {len(summary_df)} theo doanh thu"
+        )
+        st.caption(
+            f"App: **{shown_product_id}** · {_selection_desc} · sắp xếp: thấp hơn "
+            "benchmark (của chính nước đó) nhiều nhất lên đầu."
+        )
+        st.dataframe(
+            summary_df,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "eCPM hiện tại (TB 7 ngày gần nhất)": st.column_config.NumberColumn(format="$%.4f"),
+                "Benchmark": st.column_config.NumberColumn(format="$%.4f"),
+                "% so với benchmark": st.column_config.NumberColumn(format="%.1f%%"),
+                "Xu hướng eCPM": st.column_config.LineChartColumn(
+                    "Xu hướng eCPM", help="eCPM blended theo từng ngày trong khoảng đã chọn"
+                ),
+            },
+        )
+        st.caption(
+            "eCPM hiện tại = blended (weighted theo impressions) của 7 ngày gần nhất "
+            "trong khoảng đã chọn — không phải trung bình đơn giản."
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Điều hướng — API GỐC của Streamlit (st.navigation), có icon + nhóm danh mục
+# ══════════════════════════════════════════════════════════════════════
+pg = st.navigation(
+    {
+        "Adjust": [
+            st.Page(page_adjust, title="Dashboard", icon=":material/monitoring:", default=True),
+        ],
+        "BigQuery": [
+            st.Page(page_bq_overview, title="Tổng quan", icon=":material/dashboard:"),
+            st.Page(page_bq_flexible, title="Tự chọn dimension", icon=":material/tune:"),
+        ],
+        "Thị trường": [
+            st.Page(page_market_scorecard, title="Bảng điểm thị trường", icon=":material/public:"),
+        ],
+    },
+    expanded=True,
+)
+pg.run()

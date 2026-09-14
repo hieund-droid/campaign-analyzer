@@ -50,17 +50,17 @@ st.markdown(
     <style>
     [data-testid="stSidebar"] { min-width: 190px; max-width: 190px; }
 
-    /* Tiêu đề danh mục (VD "BigQuery") — chữ nhỏ, xám nhạt, có mũi tên sẵn */
+    /* Tiêu đề danh mục (mẹ, VD "BigQuery") — TO HƠN mục con, có mũi tên sẵn */
     [data-testid="stNavSectionHeader"] {
-        color: #8CA3C0;
-        font-size: 0.75rem;
-        font-weight: 600;
-        letter-spacing: 0.02em;
+        color: #C9D6E3;
+        font-size: 1rem;
+        font-weight: 700;
     }
 
-    /* Mục sidebar — mặc định (chưa chọn): xanh nhạt, giống ảnh mẫu */
+    /* Mục sidebar (con) — mặc định (chưa chọn): xanh nhạt, nhỏ hơn tiêu đề mẹ */
     [data-testid="stSidebarNavLink"] {
         color: #7FC4E8;
+        font-size: 0.85rem;
         font-weight: 500;
         border-radius: 8px;
     }
@@ -735,13 +735,21 @@ pg = st.navigation(
         # Key có tên (VD "BigQuery") = danh mục thật, Streamlit TỰ thêm mũi tên
         # xổ xuống (đã xác nhận trong mã nguồn: data-testid="stNavSectionHeader",
         # tự có sẵn, không cần tự vẽ thêm).
+        #
+        # "Bảng điểm thị trường" THỰC RA cũng lấy dữ liệu từ BigQuery (giống
+        # Tổng quan/Tự chọn dimension) — nên xếp vào nhóm BigQuery cho ĐÚNG
+        # nguồn dữ liệu, chỉ "Dashboard" (Adjust) là khác nguồn nên tách riêng.
+        #
+        # Icon đổi sang Material Symbols (nét viền tối giản) thay vì emoji —
+        # đã xác nhận icon hiện được (thấy trong ảnh user gửi), giờ đổi sang
+        # kiểu nét mảnh theo đúng phong cách ảnh mẫu.
         "": [
-            st.Page(page_adjust, title="Dashboard", icon="📈", default=True),
-            st.Page(page_market_scorecard, title="Bảng điểm thị trường", icon="🏆"),
+            st.Page(page_adjust, title="Dashboard", icon=":material/monitoring:", default=True),
         ],
         "BigQuery": [
-            st.Page(page_bq_overview, title="Tổng quan", icon="📋"),
-            st.Page(page_bq_flexible, title="Tự chọn dimension", icon="🎯"),
+            st.Page(page_bq_overview, title="Tổng quan", icon=":material/dashboard:"),
+            st.Page(page_bq_flexible, title="Tự chọn dimension", icon=":material/tune:"),
+            st.Page(page_market_scorecard, title="Bảng điểm thị trường", icon=":material/leaderboard:"),
         ],
     },
     expanded=True,

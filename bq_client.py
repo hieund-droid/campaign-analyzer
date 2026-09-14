@@ -13,6 +13,14 @@ QUAN TRỌNG — đã kiểm chứng bằng số thật, KHÁC với AGENT-BRIEF
    cho spend/installs/CPI. TikTok có ~37% dòng NULL impressions (brief KHÔNG hề
    lường trước điều này) — đang tạm loại các dòng NULL đó ra khỏi tính CPM/CTR
    (SUM() tự bỏ qua NULL), CHƯA có xác nhận cuối cùng từ user/team Data.
+
+Cột `revenue_implied` ở các hàm AdMob: view KHÔNG có cột doanh thu trực tiếp
+(brief nói rõ "No revenue column exists"), nhưng suy ra được từ chính định
+nghĩa của eCPM (= doanh thu trên mỗi 1000 impressions):
+    revenue_implied = SUM(ecpm × impressions) ÷ 1000
+Đây là công thức gốc của AdMob, không phải đoán — nhưng vẫn là số SUY RA, có
+thể lệch chút so với "Estimated earnings" thật trên AdMob console (làm tròn/
+quy đổi tiền tệ khác nhau) — không dùng để đối chiếu tài chính chính xác.
 """
 
 from datetime import date, timedelta
@@ -127,7 +135,8 @@ def fetch_admob_by_adunit(client: bigquery.Client, product_id: str, start: date,
             ad_unit,
             ad_format,
             SUM(impressions) AS impressions,
-            SAFE_DIVIDE(SUM(ecpm * impressions), NULLIF(SUM(impressions), 0)) AS ecpm_blended
+            SAFE_DIVIDE(SUM(ecpm * impressions), NULLIF(SUM(impressions), 0)) AS ecpm_blended,
+            SUM(ecpm * impressions) / 1000 AS revenue_implied
         FROM {VIEW_ADMOB}
         WHERE product_id = @product_id AND day BETWEEN @start AND @end
         GROUP BY ad_unit, ad_format
@@ -150,7 +159,8 @@ def fetch_admob_by_country(client: bigquery.Client, product_id: str, start: date
         SELECT
             country,
             SUM(impressions) AS impressions,
-            SAFE_DIVIDE(SUM(ecpm * impressions), NULLIF(SUM(impressions), 0)) AS ecpm_blended
+            SAFE_DIVIDE(SUM(ecpm * impressions), NULLIF(SUM(impressions), 0)) AS ecpm_blended,
+            SUM(ecpm * impressions) / 1000 AS revenue_implied
         FROM {VIEW_ADMOB}
         WHERE product_id = @product_id AND day BETWEEN @start AND @end
         GROUP BY country
@@ -213,7 +223,8 @@ def fetch_admob_flexible(
     sql = f"""
         SELECT
             {select_prefix}SUM(impressions) AS impressions,
-            SAFE_DIVIDE(SUM(ecpm * impressions), NULLIF(SUM(impressions), 0)) AS ecpm_blended
+            SAFE_DIVIDE(SUM(ecpm * impressions), NULLIF(SUM(impressions), 0)) AS ecpm_blended,
+            SUM(ecpm * impressions) / 1000 AS revenue_implied
         FROM {VIEW_ADMOB}
         WHERE product_id = @product_id AND day BETWEEN @start AND @end
         {group_clause}
@@ -234,7 +245,8 @@ def fetch_admob_trend(client: bigquery.Client, product_id: str, start: date, end
         SELECT
             day,
             SUM(impressions) AS impressions,
-            SAFE_DIVIDE(SUM(ecpm * impressions), NULLIF(SUM(impressions), 0)) AS ecpm_blended
+            SAFE_DIVIDE(SUM(ecpm * impressions), NULLIF(SUM(impressions), 0)) AS ecpm_blended,
+            SUM(ecpm * impressions) / 1000 AS revenue_implied
         FROM {VIEW_ADMOB}
         WHERE product_id = @product_id AND day BETWEEN @start AND @end
         GROUP BY day

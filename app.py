@@ -27,6 +27,7 @@ from dotenv import load_dotenv
 import adjust_client as ac
 import bq_client as bq
 import benchmarks as bm
+import country_meta as cmeta
 
 load_dotenv()  # đọc .env khi chạy local — dùng cho GOOGLE_APPLICATION_CREDENTIALS
 
@@ -505,19 +506,42 @@ else:
         "tạm, chưa phải nơi lưu bền vững tuyệt đối."
     )
 
-    mcol1, mcol2, mcol3 = st.columns([2, 2, 2])
+    mcol1, mcol2, mcol3 = st.columns(3)
     with mcol1:
         mkt_product_id = st.selectbox("App (product_id)", bq.KNOWN_PRODUCT_IDS, key="mkt_product")
     with mcol2:
+        # Mặc định 30 ngày — đúng khoảng dùng để tính "top theo doanh thu" mặc
+        # định (xem bên dưới), nếu đổi sang 14/60 ngày thì top-N cũng tính lại
+        # theo đúng khoảng đang chọn (không cố định cứng ở 30 ngày).
         MKT_DATE_PRESETS = {"14 ngày qua": 14, "30 ngày qua": 30, "60 ngày qua": 60}
         mkt_date_choice = st.selectbox(
-            "Khoảng ngày (để vẽ xu hướng)", list(MKT_DATE_PRESETS.keys()), index=1, key="mkt_date"
+            "Khoảng ngày", list(MKT_DATE_PRESETS.keys()), index=1, key="mkt_date"
         )
         mkt_days_back = MKT_DATE_PRESETS[mkt_date_choice]
     with mcol3:
         mkt_top_n = st.number_input(
-            "Số thị trường hiện (theo impressions cao nhất)",
+            "Số thị trường mặc định (nếu không tự chọn quốc gia)",
             min_value=5, max_value=100, value=20, step=5, key="mkt_top_n",
+            help="Chỉ áp dụng khi KHÔNG chọn quốc gia cụ thể ở dưới — mặc định "
+            "lấy top N theo DOANH THU cao nhất trong khoảng ngày đã chọn.",
+        )
+
+    st.markdown("**Lọc/chọn quốc gia** (để trống cả 3 ô = dùng mặc định top theo doanh thu)")
+    fcol1, fcol2, fcol3 = st.columns(3)
+    with fcol1:
+        mkt_regions = st.multiselect("Vùng", cmeta.ALL_REGIONS, key="mkt_regions")
+    with fcol2:
+        mkt_tiers = st.multiselect("Tier", cmeta.ALL_TIERS, key="mkt_tiers")
+    with fcol3:
+        # Danh sách quốc gia gợi ý đã lọc theo Vùng/Tier ở 2 ô trên (nếu có chọn).
+        candidate_countries = sorted(
+            c for c, r in cmeta.COUNTRY_REGION.items()
+            if (not mkt_regions or r in mkt_regions)
+            and (not mkt_tiers or cmeta.get_tier(c) in mkt_tiers)
+        )
+        mkt_countries_picked = st.multiselect(
+            "Quốc gia cụ thể (để trống = tự lấy top theo doanh thu trong nhóm đã lọc)",
+            candidate_countries, key="mkt_countries",
         )
 
     mkt_fetch_clicked = st.button("Apply", type="primary", key="mkt_fetch")
@@ -526,6 +550,9 @@ else:
         st.session_state.mkt_raw = None
         st.session_state.mkt_err = None
         st.session_state.mkt_product_shown = None
+        st.session_state.mkt_regions_used = []
+        st.session_state.mkt_tiers_used = []
+        st.session_state.mkt_countries_used = []
 
     if mkt_fetch_clicked:
         client, cerr = get_bq_client()
@@ -541,6 +568,9 @@ else:
             except Exception as e:  # noqa: BLE001
                 st.session_state.mkt_raw, st.session_state.mkt_err = None, f"Lỗi query: {e}"
         st.session_state.mkt_product_shown = mkt_product_id
+        st.session_state.mkt_regions_used = mkt_regions
+        st.session_state.mkt_tiers_used = mkt_tiers
+        st.session_state.mkt_countries_used = mkt_countries_picked
         # Fetch mới → xoá bảng benchmark đang sửa dở (nếu có) để build lại đúng
         # danh sách quốc gia mới + benchmark ĐÃ LƯU mới nhất cho app này.
         st.session_state.pop(f"mkt_bench_editor_{mkt_product_id}", None)
@@ -554,10 +584,14 @@ else:
     else:
         raw = st.session_state.mkt_raw
         shown_product_id = st.session_state.mkt_product_shown
+        regions_used = st.session_state.mkt_regions_used
+        tiers_used = st.session_state.mkt_tiers_used
+        countries_used = st.session_state.mkt_countries_used
 
-        # Tính eCPM hiện tại (TB 7 ngày gần nhất, weighted impressions) + xu hướng
-        # cho từng quốc gia — CHƯA áp benchmark (benchmark giờ theo từng quốc
-        # gia, người dùng chỉnh ở bảng ngay dưới đây).
+        # Tính eCPM hiện tại (TB 7 ngày gần nhất, weighted impressions) + doanh
+        # thu suy ra (revenue_implied, cả khoảng ngày) + xu hướng cho từng quốc
+        # gia — CHƯA áp benchmark (benchmark giờ theo từng quốc gia, người dùng
+        # chỉnh ở bảng ngay dưới đây).
         country_rows = []
         for country, g in raw.groupby("country"):
             g = g.sort_values("day")
@@ -573,14 +607,34 @@ else:
             country_rows.append({
                 "country": country,
                 "impressions": int(total_impr),
+                "revenue_implied": g["revenue_implied"].fillna(0).sum(),
                 "current_ecpm": current_ecpm,
                 "trend": g["ecpm_blended"].fillna(0).tolist(),
             })
 
+        # Lọc theo Vùng/Tier đã chọn lúc bấm Apply (áp dụng cả khi có chọn quốc
+        # gia cụ thể lẫn khi để tự động chọn top theo doanh thu).
+        if regions_used:
+            country_rows = [r for r in country_rows if cmeta.get_region(r["country"]) in regions_used]
+        if tiers_used:
+            country_rows = [r for r in country_rows if cmeta.get_tier(r["country"]) in tiers_used]
+
         if not country_rows:
-            st.warning("Không có quốc gia nào có dữ liệu impressions trong khoảng ngày này.")
+            st.warning("Không có quốc gia nào có dữ liệu trong khoảng ngày/bộ lọc Vùng-Tier đã chọn.")
         else:
-            top_countries = sorted(country_rows, key=lambda r: r["impressions"], reverse=True)[: int(mkt_top_n)]
+            if countries_used:
+                # Đã tự chọn quốc gia cụ thể → hiện ĐÚNG các nước đó (không giới
+                # hạn top N), bỏ qua nước nào không có dữ liệu.
+                by_country = {r["country"]: r for r in country_rows}
+                top_countries = [by_country[c] for c in countries_used if c in by_country]
+                missing = [c for c in countries_used if c not in by_country]
+                if missing:
+                    st.info(f"Không có dữ liệu cho: {', '.join(missing)} trong khoảng ngày này.")
+            else:
+                # Mặc định: top N theo DOANH THU cao nhất (không phải impressions).
+                top_countries = sorted(
+                    country_rows, key=lambda r: r["revenue_implied"], reverse=True
+                )[: int(mkt_top_n)]
             saved = bm.get_product_benchmarks(shown_product_id)
 
             editor_key = f"mkt_bench_editor_{shown_product_id}"
@@ -636,6 +690,8 @@ else:
                 )
                 scorecard_rows.append({
                     "Quốc gia": country,
+                    "Vùng": cmeta.get_region(country),
+                    "Tier": cmeta.get_tier(country),
                     "Impressions": r["impressions"],
                     "eCPM hiện tại (TB 7 ngày gần nhất)": round(current_ecpm, 4) if current_ecpm is not None else None,
                     "Benchmark": round(benchmark_val, 4) if benchmark_val is not None else None,
@@ -655,10 +711,14 @@ else:
 
             st.divider()
             st.subheader("Bảng điểm thị trường")
+            _selection_desc = (
+                f"{len(top_countries)} quốc gia tự chọn"
+                if countries_used
+                else f"top {len(summary_df)} theo doanh thu"
+            )
             st.caption(
-                f"App: **{shown_product_id}** · {len(summary_df)} thị trường (top theo "
-                "impressions) · sắp xếp: thấp hơn benchmark (của chính nước đó) nhiều "
-                "nhất lên đầu."
+                f"App: **{shown_product_id}** · {_selection_desc} · sắp xếp: thấp hơn "
+                "benchmark (của chính nước đó) nhiều nhất lên đầu."
             )
             st.dataframe(
                 summary_df,

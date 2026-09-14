@@ -74,6 +74,32 @@ st.markdown(
         color: #F5A623 !important;
         font-weight: 600;
     }
+
+    /* Khi THU GỌN sidebar: Streamlit mặc định co về 0, ẩn hẳn (nhìn như lỗi,
+    chỉ còn mũi tên nổi trên nền trắng). Ép giữ lại 1 dải hẹp CHỈ HIỆN ICON —
+    aria-expanded="false" là thuộc tính THẬT Streamlit tự gắn khi thu gọn (xác
+    nhận qua mã nguồn, không đoán). Cắt phần chữ bằng overflow (an toàn hơn
+    nhắm vào class chữ nội bộ, vì class đó không có tên ổn định).
+    ⚠️ Nút mở rộng lại (mũi tên) vẫn nằm ở vùng header phía trên, KHÔNG dời vào
+    trong dải icon được — 2 vùng này tách biệt trong Streamlit, dời cần chèn
+    JavaScript can thiệp DOM (rủi ro cao, không làm). */
+    [data-testid="stSidebar"][aria-expanded="false"] {
+        width: 60px !important;
+        min-width: 60px !important;
+    }
+    [data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarNavLink"] {
+        overflow: hidden;
+        white-space: nowrap;
+        justify-content: center;
+        padding-left: 0;
+        padding-right: 0;
+    }
+    [data-testid="stSidebar"][aria-expanded="false"] [data-testid="stNavSectionHeader"] {
+        display: none;
+    }
+    [data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarHeader"] img {
+        display: none;
+    }
     </style>
     """,
     unsafe_allow_html=True,

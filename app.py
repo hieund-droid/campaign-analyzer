@@ -45,7 +45,7 @@ st.set_page_config(page_title="Campaign Analyzer", page_icon="📊", layout="wid
 st.markdown(
     """
     <style>
-    [data-testid="stSidebar"] { min-width: 230px; max-width: 230px; }
+    [data-testid="stSidebar"] { min-width: 190px; max-width: 190px; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -171,10 +171,7 @@ def load_bq_data(product_id: str, days_back: int):
 # ══════════════════════════════════════════════════════════════════════
 def page_adjust():
     st.title("Adjust")
-    st.caption(
-        "🔒 API Token + App Token chỉ lưu tạm trong phiên trình duyệt của bạn — "
-        "mỗi người trong Apero dùng account Adjust riêng, không dùng chung."
-    )
+    st.caption("🔒 Token chỉ lưu trong phiên của bạn — mỗi người tự nhập.")
     col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
     with col1:
         user_api_token = st.text_input(
@@ -253,11 +250,7 @@ def page_adjust():
         if campaign_search:
             filtered = filtered[filtered["campaign"].str.contains(campaign_search, case=False, na=False)]
 
-        st.caption(
-            f"Khoảng ngày: **{st.session_state.adjust_date_choice}**, giờ Việt Nam (UTC+7). "
-            "Nguồn: Adjust Report Service API. Đổi bộ lọc App/Quốc gia/Campaign KHÔNG "
-            "gọi lại API — chỉ lọc trên dữ liệu đã kéo."
-        )
+        st.caption(f"📅 {st.session_state.adjust_date_choice} · giờ VN. Đổi bộ lọc bên dưới không tốn API.")
         if st.session_state.adjust_include_today:
             st.warning(
                 "⏱️ Đang bao gồm HÔM NAY — số liệu ngày hôm nay là số ĐANG CHẠY, chưa "
@@ -303,11 +296,7 @@ def page_adjust():
                 st.line_chart(trend)
 
             st.subheader("Dữ liệu chi tiết")
-            st.caption(
-                "Các cột ecpi_all/roas_ad_dN/retention_rate_dN ở bảng này là số Adjust "
-                "trả về CHO ĐÚNG DÒNG đó — không cộng dồn/lấy trung bình qua nhiều dòng "
-                "(KPI tổng hợp ở trên đã tính đúng cách rồi)."
-            )
+            st.caption("ℹ️ Các cột % ở đây là theo từng dòng, không cộng dồn được (KPI trên đã tính đúng).")
             st.dataframe(filtered, width="stretch", hide_index=True)
 
 
@@ -316,10 +305,7 @@ def page_adjust():
 # ══════════════════════════════════════════════════════════════════════
 def page_bq_overview():
     st.title("BigQuery — Tổng quan")
-    st.caption(
-        "🔑 Dùng 1 key BigQuery dùng CHUNG cho cả team (không phải cá nhân như Adjust) — "
-        "đã cấu hình sẵn, không cần nhập gì thêm."
-    )
+    st.caption("🔑 Key dùng chung cho cả team — không cần nhập gì thêm.")
 
     bcol1, bcol2, bcol3 = st.columns([2, 2, 1])
     with bcol1:
@@ -363,20 +349,12 @@ def page_bq_overview():
     elif st.session_state.bq_by_channel is None:
         st.info("👆 Chọn app + khoảng ngày rồi bấm **Apply** để bắt đầu.")
     else:
-        st.caption(
-            f"App: **{st.session_state.bq_product_shown}** · Khoảng ngày: "
-            f"**{st.session_state.bq_date_shown}**, giờ Bangkok/VN (UTC+7). "
-            "Nguồn: BigQuery (`v_campaign_4c_daily`, `v_admob_ecpm_adunit_daily`)."
-        )
+        st.caption(f"{st.session_state.bq_product_shown} · {st.session_state.bq_date_shown}")
 
         st.subheader("Meta / TikTok / Google Ads — theo channel")
         st.caption(
-            "⚠️ Google Ads KHÔNG có impressions/clicks thật (đã kiểm chứng: ra 0 chứ "
-            "không NULL — cột `cpm`/`ctr_pct`/`cvr_pct` sẽ trống với Google Ads, đây là "
-            "đúng theo thiết kế, không phải lỗi — chỉ tin `spend`/`installs`/`cpi` của "
-            "Google Ads). TikTok hiện có ~37% dòng NULL impressions mà tài liệu gốc "
-            "KHÔNG lường trước — đang tạm loại các dòng đó khỏi tính CPM/CTR, CHƯA có "
-            "xác nhận cuối cùng từ team Data."
+            "⚠️ Google Ads: không có CPM/CTR (thiếu impressions thật). "
+            "TikTok: ~37% dòng thiếu impressions (đang loại khỏi CPM/CTR)."
         )
         by_channel = st.session_state.bq_by_channel
         if by_channel.empty:
@@ -405,7 +383,7 @@ def page_bq_overview():
                 st.warning("Không có dữ liệu AdMob nào trong khoảng ngày này.")
             else:
                 st.dataframe(by_country, width="stretch", hide_index=True)
-        st.caption("eCPM đều là số blended, weighted theo impressions (AGENT-BRIEF.md Rule 1) — không phải trung bình đơn giản.")
+        st.caption("eCPM là số blended theo impressions, không phải trung bình đơn giản.")
 
         admob_trend = st.session_state.bq_admob_trend
         if admob_trend is not None and len(admob_trend) >= 2:
@@ -421,12 +399,7 @@ def page_bq_overview():
         elif admob_trend is not None and not admob_trend.empty:
             st.dataframe(admob_trend, width="stretch", hide_index=True)
 
-        st.caption(
-            "Lưu ý (theo AGENT-BRIEF.md): 2 bảng trên KHÔNG nối được với nhau ở mức "
-            "campaign/ad-unit — chỉ nối được ở mức country×ngày, và impressions AdMob "
-            "đến từ TOÀN BỘ user active, không riêng user do campaign này mang về. "
-            "Không có Revenue/ROAS/Retention trong nguồn này — dùng mục Adjust cho phần đó."
-        )
+        st.caption("ℹ️ 2 bảng trên không nối được ở mức campaign/ad-unit. Revenue/ROAS/Retention xem ở mục Adjust.")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -434,13 +407,7 @@ def page_bq_overview():
 # ══════════════════════════════════════════════════════════════════════
 def page_bq_flexible():
     st.title("BigQuery — Tự chọn dimension")
-    st.caption(
-        "🔑 Dùng chung key BigQuery của team. Chỉ có 2 chỉ số (impressions, eCPM "
-        "blended) và 3 dimension (quốc gia/ad unit/định dạng) — KHÔNG có Estimated "
-        "earnings/Match rate/Network requests/CTR/Clicks/Show Rate vì view BigQuery "
-        "đang dùng không chứa các số đó (muốn đủ như console AdMob thật, cần nối "
-        "thẳng AdMob API, chưa làm)."
-    )
+    st.caption("🔑 Key dùng chung team. Chỉ có Impressions + eCPM theo Quốc gia/Ad unit/Định dạng.")
 
     fcol1, fcol2, fcol3 = st.columns([2, 2, 1])
     with fcol1:
@@ -506,17 +473,8 @@ def page_bq_flexible():
 # ══════════════════════════════════════════════════════════════════════
 def page_market_scorecard():
     st.title("Bảng điểm thị trường")
-    st.caption(
-        "🔑 Dùng chung key BigQuery của team. eCPM từng quốc gia so với benchmark "
-        "bạn tự đặt **CHO TỪNG QUỐC GIA** (không dùng chung 1 mốc cho cả app, vì "
-        "eCPM lệch rất xa giữa các nước — VD Mỹ ~$20 vs Syria ~$0.8) — 🟢 = đang "
-        "ở/trên benchmark của chính nước đó, 🔴 = đang dưới."
-    )
-    st.warning(
-        "⚠️ Benchmark lưu trên máy chủ chạy app — có thể MẤT khi app khởi động lại "
-        "(Streamlit Cloud ngủ rồi thức dậy, hoặc deploy code mới). Coi là benchmark "
-        "tạm, chưa phải nơi lưu bền vững tuyệt đối."
-    )
+    st.caption("eCPM từng quốc gia so với benchmark riêng của nước đó · 🟢 đạt · 🔴 dưới benchmark.")
+    st.warning("⚠️ Benchmark có thể mất khi app khởi động lại — chưa lưu bền vững.")
 
     mcol1, mcol2, mcol3 = st.columns(3)
     with mcol1:
@@ -662,11 +620,7 @@ def page_market_scorecard():
             ]
             st.session_state[editor_key] = pd.DataFrame(bench_rows)
 
-        st.markdown(
-            "**Đặt benchmark riêng cho từng quốc gia** — mặc định = eCPM hiện tại "
-            "(chưa từng lưu thì % so với benchmark sẽ ra 0%), sửa lại theo mức bạn "
-            "muốn coi là \"đạt\" cho từng nước, rồi bấm Lưu."
-        )
+        st.markdown("**Benchmark từng quốc gia** (mặc định = eCPM hiện tại, sửa rồi bấm Lưu)")
         edited = st.data_editor(
             st.session_state[editor_key],
             key=f"{editor_key}_widget",
@@ -703,7 +657,7 @@ def page_market_scorecard():
                 "Vùng": cmeta.get_region(country),
                 "Tier": cmeta.get_tier(country),
                 "Impressions": r["impressions"],
-                "eCPM hiện tại (TB 7 ngày gần nhất)": round(current_ecpm, 4) if current_ecpm is not None else None,
+                "eCPM (7 ngày)": round(current_ecpm, 4) if current_ecpm is not None else None,
                 "Benchmark": round(benchmark_val, 4) if benchmark_val is not None else None,
                 "% so với benchmark": round(pct_vs_bench, 1) if pct_vs_bench is not None else None,
                 "Trạng thái": (
@@ -726,16 +680,13 @@ def page_market_scorecard():
             if mkt_countries_picked
             else f"top {len(summary_df)} theo doanh thu"
         )
-        st.caption(
-            f"App: **{shown_product_id}** · {_selection_desc} · sắp xếp: thấp hơn "
-            "benchmark (của chính nước đó) nhiều nhất lên đầu."
-        )
+        st.caption(f"{shown_product_id} · {_selection_desc} · thấp hơn benchmark nhiều nhất lên đầu.")
         st.dataframe(
             summary_df,
             width="stretch",
             hide_index=True,
             column_config={
-                "eCPM hiện tại (TB 7 ngày gần nhất)": st.column_config.NumberColumn(format="$%.4f"),
+                "eCPM (7 ngày)": st.column_config.NumberColumn(format="$%.4f"),
                 "Benchmark": st.column_config.NumberColumn(format="$%.4f"),
                 "% so với benchmark": st.column_config.NumberColumn(format="%.1f%%"),
                 "Xu hướng eCPM": st.column_config.LineChartColumn(
@@ -743,10 +694,7 @@ def page_market_scorecard():
                 ),
             },
         )
-        st.caption(
-            "eCPM hiện tại = blended (weighted theo impressions) của 7 ngày gần nhất "
-            "trong khoảng đã chọn — không phải trung bình đơn giản."
-        )
+        st.caption("eCPM (7 ngày) = blended theo impressions, không phải trung bình đơn giản.")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -754,15 +702,18 @@ def page_market_scorecard():
 # ══════════════════════════════════════════════════════════════════════
 pg = st.navigation(
     {
-        "Adjust": [
-            st.Page(page_adjust, title="Dashboard", icon=":material/monitoring:", default=True),
+        # Icon dùng emoji (không dùng Material Symbols nữa) — emoji không cần
+        # tải font ngoài, chắc chắn hiện được; Material Symbols cần Streamlit
+        # tải thêm font, có thể không hiện nếu mạng/CDN chặn — an toàn hơn.
+        "📊 Adjust": [
+            st.Page(page_adjust, title="Dashboard", icon="📈", default=True),
         ],
-        "BigQuery": [
-            st.Page(page_bq_overview, title="Tổng quan", icon=":material/dashboard:"),
-            st.Page(page_bq_flexible, title="Tự chọn dimension", icon=":material/tune:"),
+        "🗄️ BigQuery": [
+            st.Page(page_bq_overview, title="Tổng quan", icon="📋"),
+            st.Page(page_bq_flexible, title="Tự chọn dimension", icon="🎯"),
         ],
-        "Thị trường": [
-            st.Page(page_market_scorecard, title="Bảng điểm thị trường", icon=":material/public:"),
+        "🌍 Thị trường": [
+            st.Page(page_market_scorecard, title="Bảng điểm", icon="🏆"),
         ],
     },
     expanded=True,

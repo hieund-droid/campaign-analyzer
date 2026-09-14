@@ -10,6 +10,9 @@ bộ khác của Apero — sidebar tối, bộ lọc ngang + nút Apply, pill ch
    — xem AGENT-BRIEF.md (không commit git) và GHI_CHU_TIEN_DO.md.
 3. BigQuery — Tự chọn dimension: pivot AdMob linh hoạt (kiểu AdMob console),
    giới hạn trong 2 metric + 3 dimension mà view BigQuery có.
+4. Bảng điểm thị trường: eCPM từng quốc gia so với benchmark tự nhập cho từng
+   app (màu 🟢/🔴) + sparkline xu hướng — xem `benchmarks.py` về nơi lưu
+   benchmark và giới hạn (có thể mất khi Streamlit Cloud redeploy/ngủ dậy).
 
 Mọi mục đều KHÔNG tự gọi API khi vừa mở — chọn bộ lọc rồi bấm Apply mới gọi.
 Theme màu ở `.streamlit/config.toml` (không chứa gì bí mật, được commit git).
@@ -23,6 +26,7 @@ from dotenv import load_dotenv
 
 import adjust_client as ac
 import bq_client as bq
+import benchmarks as bm
 
 load_dotenv()  # đọc .env khi chạy local — dùng cho GOOGLE_APPLICATION_CREDENTIALS
 
@@ -147,7 +151,7 @@ def load_bq_data(product_id: str, days_back: int):
 # Sidebar — điều hướng
 # ══════════════════════════════════════════════════════════════════════
 st.sidebar.markdown("## 📊 Campaign Analyzer")
-PAGES = ["Adjust", "BigQuery — Tổng quan", "BigQuery — Tự chọn dimension"]
+PAGES = ["Adjust", "BigQuery — Tổng quan", "BigQuery — Tự chọn dimension", "Bảng điểm thị trường"]
 page = st.sidebar.radio("Report", PAGES, label_visibility="collapsed")
 st.sidebar.divider()
 st.sidebar.caption(
@@ -396,7 +400,15 @@ elif page == "BigQuery — Tổng quan":
 
         admob_trend = st.session_state.bq_admob_trend
         if admob_trend is not None and len(admob_trend) >= 2:
-            st.line_chart(admob_trend.set_index("day")[["ecpm_blended"]])
+            # 2 biểu đồ riêng — eCPM ($0.x-vài $) và doanh thu (hàng trăm $) lệch
+            # thang đo quá xa, gộp chung 1 chart sẽ làm eCPM biến mất khỏi mắt.
+            tcol1, tcol2 = st.columns(2)
+            with tcol1:
+                st.caption("eCPM blended theo ngày")
+                st.line_chart(admob_trend.set_index("day")[["ecpm_blended"]])
+            with tcol2:
+                st.caption("Doanh thu suy ra theo ngày (revenue_implied)")
+                st.line_chart(admob_trend.set_index("day")[["revenue_implied"]])
         elif admob_trend is not None and not admob_trend.empty:
             st.dataframe(admob_trend, width="stretch", hide_index=True)
 
@@ -410,7 +422,7 @@ elif page == "BigQuery — Tổng quan":
 # ══════════════════════════════════════════════════════════════════════
 # PAGE — BigQuery Tự chọn dimension (kiểu AdMob console)
 # ══════════════════════════════════════════════════════════════════════
-else:
+elif page == "BigQuery — Tự chọn dimension":
     st.caption(
         "🔑 Dùng chung key BigQuery của team. Chỉ có 2 chỉ số (impressions, eCPM "
         "blended) và 3 dimension (quốc gia/ad unit/định dạng) — KHÔNG có Estimated "
@@ -476,3 +488,151 @@ else:
         st.warning("Không có dữ liệu cho tổ hợp này.")
     else:
         st.dataframe(st.session_state.bq_flex_df, width="stretch", hide_index=True)
+
+# ══════════════════════════════════════════════════════════════════════
+# PAGE — Bảng điểm thị trường (eCPM vs benchmark theo quốc gia)
+# ══════════════════════════════════════════════════════════════════════
+else:
+    st.caption(
+        "🔑 Dùng chung key BigQuery của team. eCPM từng quốc gia so với benchmark "
+        "bạn tự đặt cho từng app — 🟢 = đang ở/trên benchmark, 🔴 = đang dưới benchmark."
+    )
+    st.warning(
+        "⚠️ Benchmark lưu trên máy chủ chạy app — có thể MẤT khi app khởi động lại "
+        "(Streamlit Cloud ngủ rồi thức dậy, hoặc deploy code mới). Coi là benchmark "
+        "tạm, chưa phải nơi lưu bền vững tuyệt đối."
+    )
+
+    mcol1, mcol2, mcol3 = st.columns([2, 2, 2])
+    with mcol1:
+        mkt_product_id = st.selectbox("App (product_id)", bq.KNOWN_PRODUCT_IDS, key="mkt_product")
+    with mcol2:
+        MKT_DATE_PRESETS = {"14 ngày qua": 14, "30 ngày qua": 30, "60 ngày qua": 60}
+        mkt_date_choice = st.selectbox(
+            "Khoảng ngày (để vẽ xu hướng)", list(MKT_DATE_PRESETS.keys()), index=1, key="mkt_date"
+        )
+        mkt_days_back = MKT_DATE_PRESETS[mkt_date_choice]
+    with mcol3:
+        mkt_top_n = st.number_input(
+            "Số thị trường hiện (theo impressions cao nhất)",
+            min_value=5, max_value=100, value=20, step=5, key="mkt_top_n",
+        )
+
+    # Key theo product_id để đổi app thì ô benchmark tự nhảy đúng giá trị đã lưu
+    # của app đó (không giữ lại giá trị của app trước).
+    saved_benchmarks = bm.load_benchmarks()
+    bcol1, bcol2 = st.columns([1, 3])
+    with bcol1:
+        mkt_benchmark_input = st.number_input(
+            f"Benchmark eCPM cho {mkt_product_id} ($)",
+            min_value=0.0,
+            value=float(saved_benchmarks.get(mkt_product_id, 1.0)),
+            step=0.01,
+            format="%.4f",
+            key=f"mkt_benchmark_{mkt_product_id}",
+        )
+    with bcol2:
+        st.write("")
+        if st.button("💾 Lưu benchmark cho app này", key="mkt_save_benchmark"):
+            bm.save_benchmark(mkt_product_id, mkt_benchmark_input)
+            st.success(f"Đã lưu benchmark ${mkt_benchmark_input:.4f} cho {mkt_product_id}.")
+
+    mkt_fetch_clicked = st.button("Apply", type="primary", key="mkt_fetch")
+
+    if "mkt_raw" not in st.session_state:
+        st.session_state.mkt_raw = None
+        st.session_state.mkt_err = None
+        st.session_state.mkt_benchmark_used = None
+        st.session_state.mkt_product_shown = None
+
+    if mkt_fetch_clicked:
+        client, cerr = get_bq_client()
+        if cerr:
+            st.session_state.mkt_raw, st.session_state.mkt_err = None, cerr
+        else:
+            start, end = bq.get_date_range(mkt_days_back)
+            try:
+                st.session_state.mkt_raw = bq.fetch_admob_flexible(
+                    client, mkt_product_id, start, end, ["country"], "day"
+                )
+                st.session_state.mkt_err = None
+            except Exception as e:  # noqa: BLE001
+                st.session_state.mkt_raw, st.session_state.mkt_err = None, f"Lỗi query: {e}"
+        # Dùng ĐÚNG benchmark đang hiện trên ô nhập tại thời điểm bấm Apply (có
+        # thể chưa bấm "Lưu" — vẫn cho xem thử trước khi quyết định lưu lại).
+        st.session_state.mkt_benchmark_used = mkt_benchmark_input
+        st.session_state.mkt_product_shown = mkt_product_id
+
+    if st.session_state.mkt_err:
+        st.error(f"❌ {st.session_state.mkt_err}")
+    elif st.session_state.mkt_raw is None:
+        st.info("👆 Chọn app, đặt benchmark rồi bấm **Apply** để bắt đầu.")
+    elif st.session_state.mkt_raw.empty:
+        st.warning("Không có dữ liệu cho app/khoảng ngày này.")
+    else:
+        raw = st.session_state.mkt_raw
+        benchmark_used = st.session_state.mkt_benchmark_used
+
+        rows = []
+        for country, g in raw.groupby("country"):
+            g = g.sort_values("day")
+            total_impr = g["impressions"].sum()
+            if not total_impr:
+                continue
+            # "eCPM hiện tại" = blended 7 ngày GẦN NHẤT trong khoảng đã chọn (đỡ
+            # nhiễu hơn so với chỉ lấy đúng 1 ngày cuối) — weighted theo impressions.
+            last7 = g.tail(7)
+            last7_impr = last7["impressions"].sum()
+            current_ecpm = (
+                (last7["ecpm_blended"].fillna(0) * last7["impressions"]).sum() / last7_impr
+                if last7_impr else None
+            )
+            pct_vs_bench = (
+                (current_ecpm - benchmark_used) / benchmark_used * 100
+                if current_ecpm is not None and benchmark_used else None
+            )
+            rows.append({
+                "Quốc gia": country,
+                "Impressions": int(total_impr),
+                "eCPM hiện tại (TB 7 ngày gần nhất)": round(current_ecpm, 4) if current_ecpm is not None else None,
+                "Benchmark": round(benchmark_used, 4),
+                "% so với benchmark": round(pct_vs_bench, 1) if pct_vs_bench is not None else None,
+                "Trạng thái": ("🟢" if current_ecpm >= benchmark_used else "🔴") if current_ecpm is not None else "⚪",
+                "Xu hướng eCPM": g["ecpm_blended"].fillna(0).tolist(),
+            })
+
+        if not rows:
+            st.warning("Không có quốc gia nào có dữ liệu impressions trong khoảng ngày này.")
+        else:
+            summary_df = (
+                pd.DataFrame(rows)
+                .sort_values("Impressions", ascending=False)
+                .head(int(mkt_top_n))
+                .sort_values("% so với benchmark")  # thị trường tệ nhất lên đầu
+                .reset_index(drop=True)
+            )
+
+            st.caption(
+                f"App: **{st.session_state.mkt_product_shown}** · Benchmark: "
+                f"**${benchmark_used:.4f}** · {len(summary_df)}/{len(rows)} thị trường "
+                f"(top theo impressions) · sắp xếp: thấp hơn benchmark nhiều nhất lên đầu."
+            )
+
+            st.dataframe(
+                summary_df,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "eCPM hiện tại (TB 7 ngày gần nhất)": st.column_config.NumberColumn(format="$%.4f"),
+                    "Benchmark": st.column_config.NumberColumn(format="$%.4f"),
+                    "% so với benchmark": st.column_config.NumberColumn(format="%.1f%%"),
+                    "Xu hướng eCPM": st.column_config.LineChartColumn(
+                        "Xu hướng eCPM", help="eCPM blended theo từng ngày trong khoảng đã chọn"
+                    ),
+                },
+            )
+            st.caption(
+                "eCPM hiện tại = blended (weighted theo impressions) của 7 ngày gần nhất "
+                "trong khoảng đã chọn — không phải trung bình đơn giản. Đổi benchmark rồi "
+                "bấm Apply lại để tính lại % so với benchmark mới."
+            )

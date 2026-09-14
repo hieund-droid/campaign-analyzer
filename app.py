@@ -36,6 +36,21 @@ load_dotenv()  # đọc .env khi chạy local — dùng cho GOOGLE_APPLICATION_C
 
 st.set_page_config(page_title="Campaign Analyzer", page_icon="📊", layout="wide")
 
+# Streamlit KHÔNG có tuỳ chọn chính thức để chỉnh độ rộng sidebar (đã tra
+# set_page_config + toàn bộ config.py, không có) — đây là CSS không chính thức
+# nhắm vào data-testid nội bộ của Streamlit (kỹ thuật phổ biến, khá ổn định qua
+# các bản gần đây nhưng KHÔNG được Streamlit cam kết hỗ trợ — có thể cần chỉnh
+# lại nếu 1 bản Streamlit sau này đổi tên data-testid). Mục tự chọn (nội dung
+# ngắn: icon + 1-2 chữ) không cần rộng như mặc định.
+st.markdown(
+    """
+    <style>
+    [data-testid="stSidebar"] { min-width: 230px; max-width: 230px; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 
 # ══════════════════════════════════════════════════════════════════════
 # Adjust — hàm dùng chung

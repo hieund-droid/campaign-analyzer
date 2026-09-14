@@ -495,7 +495,9 @@ elif page == "BigQuery — Tự chọn dimension":
 else:
     st.caption(
         "🔑 Dùng chung key BigQuery của team. eCPM từng quốc gia so với benchmark "
-        "bạn tự đặt cho từng app — 🟢 = đang ở/trên benchmark, 🔴 = đang dưới benchmark."
+        "bạn tự đặt **CHO TỪNG QUỐC GIA** (không dùng chung 1 mốc cho cả app, vì "
+        "eCPM lệch rất xa giữa các nước — VD Mỹ ~$20 vs Syria ~$0.8) — 🟢 = đang "
+        "ở/trên benchmark của chính nước đó, 🔴 = đang dưới."
     )
     st.warning(
         "⚠️ Benchmark lưu trên máy chủ chạy app — có thể MẤT khi app khởi động lại "
@@ -518,31 +520,11 @@ else:
             min_value=5, max_value=100, value=20, step=5, key="mkt_top_n",
         )
 
-    # Key theo product_id để đổi app thì ô benchmark tự nhảy đúng giá trị đã lưu
-    # của app đó (không giữ lại giá trị của app trước).
-    saved_benchmarks = bm.load_benchmarks()
-    bcol1, bcol2 = st.columns([1, 3])
-    with bcol1:
-        mkt_benchmark_input = st.number_input(
-            f"Benchmark eCPM cho {mkt_product_id} ($)",
-            min_value=0.0,
-            value=float(saved_benchmarks.get(mkt_product_id, 1.0)),
-            step=0.01,
-            format="%.4f",
-            key=f"mkt_benchmark_{mkt_product_id}",
-        )
-    with bcol2:
-        st.write("")
-        if st.button("💾 Lưu benchmark cho app này", key="mkt_save_benchmark"):
-            bm.save_benchmark(mkt_product_id, mkt_benchmark_input)
-            st.success(f"Đã lưu benchmark ${mkt_benchmark_input:.4f} cho {mkt_product_id}.")
-
     mkt_fetch_clicked = st.button("Apply", type="primary", key="mkt_fetch")
 
     if "mkt_raw" not in st.session_state:
         st.session_state.mkt_raw = None
         st.session_state.mkt_err = None
-        st.session_state.mkt_benchmark_used = None
         st.session_state.mkt_product_shown = None
 
     if mkt_fetch_clicked:
@@ -558,66 +540,126 @@ else:
                 st.session_state.mkt_err = None
             except Exception as e:  # noqa: BLE001
                 st.session_state.mkt_raw, st.session_state.mkt_err = None, f"Lỗi query: {e}"
-        # Dùng ĐÚNG benchmark đang hiện trên ô nhập tại thời điểm bấm Apply (có
-        # thể chưa bấm "Lưu" — vẫn cho xem thử trước khi quyết định lưu lại).
-        st.session_state.mkt_benchmark_used = mkt_benchmark_input
         st.session_state.mkt_product_shown = mkt_product_id
+        # Fetch mới → xoá bảng benchmark đang sửa dở (nếu có) để build lại đúng
+        # danh sách quốc gia mới + benchmark ĐÃ LƯU mới nhất cho app này.
+        st.session_state.pop(f"mkt_bench_editor_{mkt_product_id}", None)
 
     if st.session_state.mkt_err:
         st.error(f"❌ {st.session_state.mkt_err}")
     elif st.session_state.mkt_raw is None:
-        st.info("👆 Chọn app, đặt benchmark rồi bấm **Apply** để bắt đầu.")
+        st.info("👆 Chọn app + khoảng ngày rồi bấm **Apply** để bắt đầu.")
     elif st.session_state.mkt_raw.empty:
         st.warning("Không có dữ liệu cho app/khoảng ngày này.")
     else:
         raw = st.session_state.mkt_raw
-        benchmark_used = st.session_state.mkt_benchmark_used
+        shown_product_id = st.session_state.mkt_product_shown
 
-        rows = []
+        # Tính eCPM hiện tại (TB 7 ngày gần nhất, weighted impressions) + xu hướng
+        # cho từng quốc gia — CHƯA áp benchmark (benchmark giờ theo từng quốc
+        # gia, người dùng chỉnh ở bảng ngay dưới đây).
+        country_rows = []
         for country, g in raw.groupby("country"):
             g = g.sort_values("day")
             total_impr = g["impressions"].sum()
             if not total_impr:
                 continue
-            # "eCPM hiện tại" = blended 7 ngày GẦN NHẤT trong khoảng đã chọn (đỡ
-            # nhiễu hơn so với chỉ lấy đúng 1 ngày cuối) — weighted theo impressions.
             last7 = g.tail(7)
             last7_impr = last7["impressions"].sum()
             current_ecpm = (
                 (last7["ecpm_blended"].fillna(0) * last7["impressions"]).sum() / last7_impr
                 if last7_impr else None
             )
-            pct_vs_bench = (
-                (current_ecpm - benchmark_used) / benchmark_used * 100
-                if current_ecpm is not None and benchmark_used else None
-            )
-            rows.append({
-                "Quốc gia": country,
-                "Impressions": int(total_impr),
-                "eCPM hiện tại (TB 7 ngày gần nhất)": round(current_ecpm, 4) if current_ecpm is not None else None,
-                "Benchmark": round(benchmark_used, 4),
-                "% so với benchmark": round(pct_vs_bench, 1) if pct_vs_bench is not None else None,
-                "Trạng thái": ("🟢" if current_ecpm >= benchmark_used else "🔴") if current_ecpm is not None else "⚪",
-                "Xu hướng eCPM": g["ecpm_blended"].fillna(0).tolist(),
+            country_rows.append({
+                "country": country,
+                "impressions": int(total_impr),
+                "current_ecpm": current_ecpm,
+                "trend": g["ecpm_blended"].fillna(0).tolist(),
             })
 
-        if not rows:
+        if not country_rows:
             st.warning("Không có quốc gia nào có dữ liệu impressions trong khoảng ngày này.")
         else:
+            top_countries = sorted(country_rows, key=lambda r: r["impressions"], reverse=True)[: int(mkt_top_n)]
+            saved = bm.get_product_benchmarks(shown_product_id)
+
+            editor_key = f"mkt_bench_editor_{shown_product_id}"
+            if editor_key not in st.session_state:
+                bench_rows = [
+                    {
+                        "Quốc gia": r["country"],
+                        "Impressions": r["impressions"],
+                        "eCPM hiện tại": round(r["current_ecpm"], 4) if r["current_ecpm"] is not None else None,
+                        # Chưa lưu benchmark cho nước này lần nào → mặc định = eCPM
+                        # hiện tại (ra 0% lệch ban đầu), tự sửa lại theo mức muốn.
+                        "Benchmark ($)": round(saved.get(r["country"], r["current_ecpm"] or 0.0), 4),
+                    }
+                    for r in top_countries
+                ]
+                st.session_state[editor_key] = pd.DataFrame(bench_rows)
+
+            st.markdown(
+                "**Đặt benchmark riêng cho từng quốc gia** — mặc định = eCPM hiện tại "
+                "(chưa từng lưu thì % so với benchmark sẽ ra 0%), sửa lại theo mức bạn "
+                "muốn coi là \"đạt\" cho từng nước, rồi bấm Lưu."
+            )
+            edited = st.data_editor(
+                st.session_state[editor_key],
+                key=f"{editor_key}_widget",
+                hide_index=True,
+                width="stretch",
+                disabled=["Quốc gia", "Impressions", "eCPM hiện tại"],
+                column_config={
+                    "eCPM hiện tại": st.column_config.NumberColumn(format="$%.4f"),
+                    "Benchmark ($)": st.column_config.NumberColumn(format="$%.4f", min_value=0.0, step=0.01),
+                },
+            )
+            st.session_state[editor_key] = edited
+
+            if st.button("💾 Lưu benchmark cho từng quốc gia", key="mkt_save_benchmark"):
+                new_map = dict(zip(edited["Quốc gia"], edited["Benchmark ($)"]))
+                bm.save_product_benchmarks(shown_product_id, new_map)
+                st.success(f"Đã lưu benchmark cho {len(new_map)} quốc gia của {shown_product_id}.")
+
+            # Dùng benchmark ĐANG HIỆN trên bảng sửa (kể cả chưa bấm Lưu) để tính
+            # bảng điểm bên dưới — cho xem thử trước khi quyết định lưu lại.
+            benchmark_lookup = dict(zip(edited["Quốc gia"], edited["Benchmark ($)"]))
+
+            scorecard_rows = []
+            for r in top_countries:
+                country = r["country"]
+                current_ecpm = r["current_ecpm"]
+                benchmark_val = benchmark_lookup.get(country)
+                pct_vs_bench = (
+                    (current_ecpm - benchmark_val) / benchmark_val * 100
+                    if current_ecpm is not None and benchmark_val else None
+                )
+                scorecard_rows.append({
+                    "Quốc gia": country,
+                    "Impressions": r["impressions"],
+                    "eCPM hiện tại (TB 7 ngày gần nhất)": round(current_ecpm, 4) if current_ecpm is not None else None,
+                    "Benchmark": round(benchmark_val, 4) if benchmark_val is not None else None,
+                    "% so với benchmark": round(pct_vs_bench, 1) if pct_vs_bench is not None else None,
+                    "Trạng thái": (
+                        ("🟢" if current_ecpm >= benchmark_val else "🔴")
+                        if current_ecpm is not None and benchmark_val is not None else "⚪"
+                    ),
+                    "Xu hướng eCPM": r["trend"],
+                })
+
             summary_df = (
-                pd.DataFrame(rows)
-                .sort_values("Impressions", ascending=False)
-                .head(int(mkt_top_n))
-                .sort_values("% so với benchmark")  # thị trường tệ nhất lên đầu
+                pd.DataFrame(scorecard_rows)
+                .sort_values("% so với benchmark")  # thị trường tệ nhất (so với benchmark của chính nó) lên đầu
                 .reset_index(drop=True)
             )
 
+            st.divider()
+            st.subheader("Bảng điểm thị trường")
             st.caption(
-                f"App: **{st.session_state.mkt_product_shown}** · Benchmark: "
-                f"**${benchmark_used:.4f}** · {len(summary_df)}/{len(rows)} thị trường "
-                f"(top theo impressions) · sắp xếp: thấp hơn benchmark nhiều nhất lên đầu."
+                f"App: **{shown_product_id}** · {len(summary_df)} thị trường (top theo "
+                "impressions) · sắp xếp: thấp hơn benchmark (của chính nước đó) nhiều "
+                "nhất lên đầu."
             )
-
             st.dataframe(
                 summary_df,
                 width="stretch",
@@ -633,6 +675,5 @@ else:
             )
             st.caption(
                 "eCPM hiện tại = blended (weighted theo impressions) của 7 ngày gần nhất "
-                "trong khoảng đã chọn — không phải trung bình đơn giản. Đổi benchmark rồi "
-                "bấm Apply lại để tính lại % so với benchmark mới."
+                "trong khoảng đã chọn — không phải trung bình đơn giản."
             )

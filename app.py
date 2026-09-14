@@ -4,18 +4,21 @@ Streamlit, không tự chế bằng radio nữa) — cho icon + nhóm danh mục
 tool nội bộ khác của Apero. Việc thu/mở cả sidebar là tính năng có sẵn của
 Streamlit (không phải do code này), phần code cải thiện là icon + nhóm mục.
 
-4 trang, nhóm theo 2 danh mục:
-- "Adjust": installs, CPI, ad revenue, ROAS D0/D7/D30, retention D1/D7, ARPU.
-  MỖI NGƯỜI TỰ NHẬP API Token + App Token của mình (mỗi người dùng account
-  Adjust riêng) — không dùng chung Secrets, chỉ lưu tạm trong session của họ.
-- "BigQuery": Tổng quan (Meta/TikTok/Google Ads theo channel + AdMob theo ad
-  unit/quốc gia) + Tự chọn dimension (pivot AdMob linh hoạt kiểu AdMob console,
-  giới hạn trong 2 metric + 3 dimension mà view BigQuery có). Dùng 1 service
-  account key CHUNG cho cả team (đọc từ Secrets khi deploy, hoặc
+3 trang, nhóm theo 2 danh mục:
+- "Dashboard" (mục lẻ, không thuộc danh mục nào): Adjust — installs, CPI, ad
+  revenue, ROAS D0/D7/D30, retention D1/D7, ARPU. MỖI NGƯỜI TỰ NHẬP API Token +
+  App Token của mình (mỗi người dùng account Adjust riêng) — không dùng chung
+  Secrets, chỉ lưu tạm trong session của họ.
+- "BigQuery" (danh mục, 2 trang con — cả 2 đều lấy dữ liệu từ BigQuery):
+  - "Report Builder": pivot AdMob linh hoạt kiểu AdMob console (tự chọn
+    dimension: quốc gia/ad unit/định dạng + mốc thời gian), giới hạn trong 2
+    metric + 3 dimension mà view BigQuery có. Đã bỏ trang "Tổng quan" cũ
+    (Meta/TikTok/Google Ads theo channel) theo yêu cầu user.
+  - "Market Board": eCPM từng quốc gia so với benchmark tự nhập cho từng app
+    (màu 🟢/🔴) + sparkline xu hướng — xem `benchmarks.py`.
+  Dùng 1 service account key CHUNG cho cả team (đọc từ Secrets khi deploy, hoặc
   GOOGLE_APPLICATION_CREDENTIALS trong .env khi chạy local) — xem
   AGENT-BRIEF.md (không commit git) và GHI_CHU_TIEN_DO.md.
-- "Thị trường": Bảng điểm thị trường — eCPM từng quốc gia so với benchmark tự
-  nhập cho từng app (màu 🟢/🔴) + sparkline xu hướng — xem `benchmarks.py`.
 
 Mọi trang đều KHÔNG tự gọi API khi vừa mở — chọn bộ lọc rồi bấm Apply mới gọi.
 Theme màu ở `.streamlit/config.toml` (không chứa gì bí mật, được commit git).
@@ -201,25 +204,6 @@ def get_bq_client():
     return None, "Thiếu cấu hình BigQuery (Secrets [gcp_service_account] hoặc GOOGLE_APPLICATION_CREDENTIALS)."
 
 
-@st.cache_data(ttl=15 * 60, show_spinner="Đang query BigQuery...")
-def load_bq_data(product_id: str, days_back: int):
-    client, err = get_bq_client()
-    if err:
-        return None, None, None, None, None, err
-
-    start, end = bq.get_date_range(days_back)
-    try:
-        by_channel = bq.fetch_campaign_by_channel(client, product_id, start, end)
-        campaign_trend = bq.fetch_campaign_trend(client, product_id, start, end)
-        by_adunit = bq.fetch_admob_by_adunit(client, product_id, start, end)
-        by_country = bq.fetch_admob_by_country(client, product_id, start, end)
-        admob_trend = bq.fetch_admob_trend(client, product_id, start, end)
-    except Exception as e:  # noqa: BLE001
-        return None, None, None, None, None, f"Lỗi query BigQuery: {e}"
-
-    return by_channel, campaign_trend, by_adunit, by_country, admob_trend, None
-
-
 # ══════════════════════════════════════════════════════════════════════
 # TRANG — Adjust
 # ══════════════════════════════════════════════════════════════════════
@@ -355,112 +339,10 @@ def page_adjust():
 
 
 # ══════════════════════════════════════════════════════════════════════
-# TRANG — BigQuery Tổng quan
+# TRANG — Report Builder (tự chọn dimension AdMob, kiểu AdMob console)
 # ══════════════════════════════════════════════════════════════════════
-def page_bq_overview():
-    st.title("BigQuery — Tổng quan")
-    st.caption("🔑 Key dùng chung cho cả team — không cần nhập gì thêm.")
-
-    bcol1, bcol2, bcol3 = st.columns([2, 2, 1])
-    with bcol1:
-        product_id = st.selectbox("App (product_id)", bq.KNOWN_PRODUCT_IDS, key="bq_product")
-    with bcol2:
-        BQ_DATE_PRESETS = {"Hôm qua": 1, "7 ngày qua": 7, "14 ngày qua": 14, "30 ngày qua": 30}
-        bq_date_choice = st.selectbox(
-            "Khoảng ngày", list(BQ_DATE_PRESETS.keys()), index=1, key="bq_date",
-            help="Dữ liệu này KHÔNG có 'hôm nay' — ngày mới nhất luôn là hôm qua (theo AGENT-BRIEF.md).",
-        )
-        bq_days_back = BQ_DATE_PRESETS[bq_date_choice]
-    with bcol3:
-        st.write("")
-        st.write("")
-        bq_fetch_clicked = st.button("Apply", type="primary", key="bq_fetch", width="stretch")
-
-    if "bq_by_channel" not in st.session_state:
-        st.session_state.bq_by_channel = None
-        st.session_state.bq_campaign_trend = None
-        st.session_state.bq_by_adunit = None
-        st.session_state.bq_by_country = None
-        st.session_state.bq_admob_trend = None
-        st.session_state.bq_err = None
-        st.session_state.bq_product_shown = None
-        st.session_state.bq_date_shown = None
-
-    if bq_fetch_clicked:
-        (
-            st.session_state.bq_by_channel,
-            st.session_state.bq_campaign_trend,
-            st.session_state.bq_by_adunit,
-            st.session_state.bq_by_country,
-            st.session_state.bq_admob_trend,
-            st.session_state.bq_err,
-        ) = load_bq_data(product_id, bq_days_back)
-        st.session_state.bq_product_shown = product_id
-        st.session_state.bq_date_shown = bq_date_choice
-
-    if st.session_state.bq_err:
-        st.error(f"❌ {st.session_state.bq_err}")
-    elif st.session_state.bq_by_channel is None:
-        st.info("👆 Chọn app + khoảng ngày rồi bấm **Apply** để bắt đầu.")
-    else:
-        st.caption(f"{st.session_state.bq_product_shown} · {st.session_state.bq_date_shown}")
-
-        st.subheader("Meta / TikTok / Google Ads — theo channel")
-        st.caption(
-            "⚠️ Google Ads: không có CPM/CTR (thiếu impressions thật). "
-            "TikTok: ~37% dòng thiếu impressions (đang loại khỏi CPM/CTR)."
-        )
-        by_channel = st.session_state.bq_by_channel
-        if by_channel.empty:
-            st.warning("Không có dữ liệu channel nào trong khoảng ngày này.")
-        else:
-            st.dataframe(by_channel, width="stretch", hide_index=True)
-
-        campaign_trend = st.session_state.bq_campaign_trend
-        if campaign_trend is not None and len(campaign_trend) >= 2:
-            st.line_chart(campaign_trend.set_index("day")[["spend", "installs"]])
-        elif campaign_trend is not None and not campaign_trend.empty:
-            st.dataframe(campaign_trend, width="stretch", hide_index=True)
-
-        adcol1, adcol2 = st.columns(2)
-        with adcol1:
-            st.subheader("AdMob — eCPM theo ad unit")
-            by_adunit = st.session_state.bq_by_adunit
-            if by_adunit.empty:
-                st.warning("Không có dữ liệu AdMob nào trong khoảng ngày này.")
-            else:
-                st.dataframe(by_adunit, width="stretch", hide_index=True)
-        with adcol2:
-            st.subheader("AdMob — eCPM theo thị trường (quốc gia)")
-            by_country = st.session_state.bq_by_country
-            if by_country.empty:
-                st.warning("Không có dữ liệu AdMob nào trong khoảng ngày này.")
-            else:
-                st.dataframe(by_country, width="stretch", hide_index=True)
-        st.caption("eCPM là số blended theo impressions, không phải trung bình đơn giản.")
-
-        admob_trend = st.session_state.bq_admob_trend
-        if admob_trend is not None and len(admob_trend) >= 2:
-            # 2 biểu đồ riêng — eCPM ($0.x-vài $) và doanh thu (hàng trăm $) lệch
-            # thang đo quá xa, gộp chung 1 chart sẽ làm eCPM biến mất khỏi mắt.
-            tcol1, tcol2 = st.columns(2)
-            with tcol1:
-                st.caption("eCPM blended theo ngày")
-                st.line_chart(admob_trend.set_index("day")[["ecpm_blended"]])
-            with tcol2:
-                st.caption("Doanh thu suy ra theo ngày (revenue_implied)")
-                st.line_chart(admob_trend.set_index("day")[["revenue_implied"]])
-        elif admob_trend is not None and not admob_trend.empty:
-            st.dataframe(admob_trend, width="stretch", hide_index=True)
-
-        st.caption("ℹ️ 2 bảng trên không nối được ở mức campaign/ad-unit. Revenue/ROAS/Retention xem ở mục Adjust.")
-
-
-# ══════════════════════════════════════════════════════════════════════
-# TRANG — BigQuery Tự chọn dimension (kiểu AdMob console)
-# ══════════════════════════════════════════════════════════════════════
-def page_bq_flexible():
-    st.title("BigQuery — Tự chọn dimension")
+def page_report_builder():
+    st.title("Report Builder")
     st.caption("🔑 Key dùng chung team. Chỉ có Impressions + eCPM theo Quốc gia/Ad unit/Định dạng.")
 
     fcol1, fcol2, fcol3 = st.columns([2, 2, 1])
@@ -523,10 +405,10 @@ def page_bq_flexible():
 
 
 # ══════════════════════════════════════════════════════════════════════
-# TRANG — Bảng điểm thị trường (eCPM vs benchmark theo quốc gia)
+# TRANG — Market Board (eCPM vs benchmark theo quốc gia)
 # ══════════════════════════════════════════════════════════════════════
-def page_market_scorecard():
-    st.title("Bảng điểm thị trường")
+def page_market_board():
+    st.title("Market Board")
     st.caption("eCPM từng quốc gia so với benchmark riêng của nước đó · 🟢 đạt · 🔴 dưới benchmark.")
     st.warning("⚠️ Benchmark có thể mất khi app khởi động lại — chưa lưu bền vững.")
 
@@ -728,7 +610,7 @@ def page_market_scorecard():
         )
 
         st.divider()
-        st.subheader("Bảng điểm thị trường")
+        st.subheader("Market Board")
         _selection_desc = (
             f"{len(top_countries)} quốc gia tự chọn"
             if mkt_countries_picked
@@ -762,20 +644,19 @@ pg = st.navigation(
         # xổ xuống (đã xác nhận trong mã nguồn: data-testid="stNavSectionHeader",
         # tự có sẵn, không cần tự vẽ thêm).
         #
-        # "Bảng điểm thị trường" THỰC RA cũng lấy dữ liệu từ BigQuery (giống
-        # Tổng quan/Tự chọn dimension) — nên xếp vào nhóm BigQuery cho ĐÚNG
-        # nguồn dữ liệu, chỉ "Dashboard" (Adjust) là khác nguồn nên tách riêng.
+        # "Market Board" và "Report Builder" đều lấy dữ liệu từ BigQuery — xếp
+        # chung nhóm BigQuery cho ĐÚNG nguồn dữ liệu. Chỉ "Dashboard" (Adjust)
+        # khác nguồn nên tách riêng. Đã bỏ hẳn trang "Tổng quan" (Meta/TikTok/
+        # Google Ads theo channel) theo yêu cầu user — chỉ còn Report Builder.
         #
-        # Icon đổi sang Material Symbols (nét viền tối giản) thay vì emoji —
-        # đã xác nhận icon hiện được (thấy trong ảnh user gửi), giờ đổi sang
-        # kiểu nét mảnh theo đúng phong cách ảnh mẫu.
+        # Icon dùng Material Symbols (nét viền tối giản) — theo đúng phong cách
+        # ảnh mẫu user gửi.
         "": [
             st.Page(page_adjust, title="Dashboard", icon=":material/monitoring:", default=True),
         ],
         "BigQuery": [
-            st.Page(page_bq_overview, title="Tổng quan", icon=":material/dashboard:"),
-            st.Page(page_bq_flexible, title="Tự chọn dimension", icon=":material/tune:"),
-            st.Page(page_market_scorecard, title="Bảng điểm thị trường", icon=":material/leaderboard:"),
+            st.Page(page_report_builder, title="Report Builder", icon=":material/tune:"),
+            st.Page(page_market_board, title="Market Board", icon=":material/leaderboard:"),
         ],
     },
     expanded=True,

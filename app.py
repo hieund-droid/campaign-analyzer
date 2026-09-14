@@ -36,16 +36,44 @@ load_dotenv()  # đọc .env khi chạy local — dùng cho GOOGLE_APPLICATION_C
 
 st.set_page_config(page_title="Campaign Analyzer", page_icon="📊", layout="wide")
 
-# Streamlit KHÔNG có tuỳ chọn chính thức để chỉnh độ rộng sidebar (đã tra
-# set_page_config + toàn bộ config.py, không có) — đây là CSS không chính thức
-# nhắm vào data-testid nội bộ của Streamlit (kỹ thuật phổ biến, khá ổn định qua
-# các bản gần đây nhưng KHÔNG được Streamlit cam kết hỗ trợ — có thể cần chỉnh
-# lại nếu 1 bản Streamlit sau này đổi tên data-testid). Mục tự chọn (nội dung
-# ngắn: icon + 1-2 chữ) không cần rộng như mặc định.
+# Streamlit KHÔNG có tuỳ chọn chính thức để chỉnh độ rộng/màu từng mục sidebar
+# (đã tra set_page_config + toàn bộ config.py, không có) — đây là CSS không
+# chính thức. Các data-testid dưới đây ĐÃ XÁC NHẬN THẬT bằng cách đọc trực tiếp
+# file JS đã build của Streamlit (không đoán): stSidebarNavLink (mỗi mục),
+# aria-current="page" (mục đang chọn — thuộc tính HTML chuẩn, Streamlit tự gắn),
+# stNavSectionHeader (tiêu đề danh mục có mũi tên xổ xuống — mũi tên là Streamlit
+# TỰ VẼ SẴN, không phải mình thêm). Vẫn có rủi ro: đây là data-testid NỘI BỘ,
+# KHÔNG được Streamlit cam kết ổn định giữa các bản — có thể cần dò lại nếu 1
+# bản Streamlit sau này đổi tên.
 st.markdown(
     """
     <style>
     [data-testid="stSidebar"] { min-width: 190px; max-width: 190px; }
+
+    /* Tiêu đề danh mục (VD "BigQuery") — chữ nhỏ, xám nhạt, có mũi tên sẵn */
+    [data-testid="stNavSectionHeader"] {
+        color: #8CA3C0;
+        font-size: 0.75rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+    }
+
+    /* Mục sidebar — mặc định (chưa chọn): xanh nhạt, giống ảnh mẫu */
+    [data-testid="stSidebarNavLink"] {
+        color: #7FC4E8;
+        font-weight: 500;
+        border-radius: 8px;
+    }
+
+    /* Mục đang chọn: nền cam nhạt bo góc + chữ cam, giống ảnh mẫu */
+    [data-testid="stSidebarNavLink"][aria-current="page"] {
+        background-color: rgba(245, 166, 35, 0.16);
+        border-radius: 8px;
+    }
+    [data-testid="stSidebarNavLink"][aria-current="page"] span {
+        color: #F5A623 !important;
+        font-weight: 600;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -702,18 +730,18 @@ def page_market_scorecard():
 # ══════════════════════════════════════════════════════════════════════
 pg = st.navigation(
     {
-        # Icon dùng emoji (không dùng Material Symbols nữa) — emoji không cần
-        # tải font ngoài, chắc chắn hiện được; Material Symbols cần Streamlit
-        # tải thêm font, có thể không hiện nếu mạng/CDN chặn — an toàn hơn.
-        "📊 Adjust": [
+        # Key rỗng "" = mục lẻ, KHÔNG thuộc danh mục nào — Streamlit hiện phẳng,
+        # không có mũi tên dropdown (giống "Intraday Report" trong ảnh mẫu).
+        # Key có tên (VD "BigQuery") = danh mục thật, Streamlit TỰ thêm mũi tên
+        # xổ xuống (đã xác nhận trong mã nguồn: data-testid="stNavSectionHeader",
+        # tự có sẵn, không cần tự vẽ thêm).
+        "": [
             st.Page(page_adjust, title="Dashboard", icon="📈", default=True),
+            st.Page(page_market_scorecard, title="Bảng điểm thị trường", icon="🏆"),
         ],
-        "🗄️ BigQuery": [
+        "BigQuery": [
             st.Page(page_bq_overview, title="Tổng quan", icon="📋"),
             st.Page(page_bq_flexible, title="Tự chọn dimension", icon="🎯"),
-        ],
-        "🌍 Thị trường": [
-            st.Page(page_market_scorecard, title="Bảng điểm", icon="🏆"),
         ],
     },
     expanded=True,

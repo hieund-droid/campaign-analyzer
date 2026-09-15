@@ -13,7 +13,11 @@ Streamlit (không phải do code này), phần code cải thiện là icon + nh�
   - "Meta + Adjust": ghép dữ liệu Meta (BigQuery, channel="Facebook") với
     Adjust theo campaign + ngày + quốc gia — xem `meta_adjust_merge.py` để
     biết cách ghép (đã kiểm chứng khớp 100% campaign_id bằng số thật). Vẫn
-    cần token Adjust cá nhân (dùng chung ô nhớ với trang Dashboard).
+    cần token Adjust cá nhân (dùng chung ô nhớ với trang Dashboard). Có thêm
+    PL2 (lãi marketing = ad_revenue − spend, đã chốt công thức với user).
+  - "Cảnh báo": phát hiện CPI tăng đột biến / ROAS D0 tụt đột biến / xu hướng
+    giảm dần kéo dài, theo TỪNG CAMPAIGN — chỉ dùng Adjust (không cần ghép
+    BigQuery, áp dụng mọi channel) — xem `campaign_alerts.py`.
 - "BigQuery" (danh mục, 2 trang con — cả 2 đều lấy dữ liệu từ BigQuery):
   - "Report Builder": pivot AdMob linh hoạt kiểu AdMob console (tự chọn
     dimension: quốc gia/ad unit/định dạng + mốc thời gian), giới hạn trong 2
@@ -41,6 +45,7 @@ import bq_client as bq
 import benchmarks as bm
 import country_meta as cmeta
 import meta_adjust_merge as mam
+import campaign_alerts as calerts
 
 load_dotenv()  # đọc .env khi chạy local — dùng cho GOOGLE_APPLICATION_CREDENTIALS
 
@@ -846,6 +851,125 @@ def page_meta_adjust():
 
 
 # ══════════════════════════════════════════════════════════════════════
+# TRANG — Cảnh báo (đột biến / giảm dần CPI + ROAS D0 theo từng campaign)
+# ══════════════════════════════════════════════════════════════════════
+def page_alerts():
+    st.title("Cảnh báo")
+    st.caption(
+        "Phát hiện CPI tăng bất thường / ROAS D0 tụt bất thường theo TỪNG CAMPAIGN — "
+        "dùng riêng dữ liệu Adjust, áp dụng cho MỌI channel (không chỉ Meta)."
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        al_product_id = st.selectbox("App (product_id)", bq.KNOWN_PRODUCT_IDS, key="al_product")
+    with col2:
+        AL_DATE_PRESETS = {"30 ngày qua": 30, "60 ngày qua": 60}
+        al_date_choice = st.selectbox(
+            "Khoảng ngày kéo (cần đủ dài để có mốc so sánh)",
+            list(AL_DATE_PRESETS.keys()), key="al_date",
+        )
+        al_days_back = AL_DATE_PRESETS[al_date_choice]
+
+    st.caption("🔒 Cần token Adjust cá nhân (dùng chung ô nhớ với trang Dashboard/Meta + Adjust).")
+    acol1, acol2, acol3 = st.columns([2, 2, 1])
+    with acol1:
+        al_api_token = st.text_input("API Token cá nhân (Adjust)", type="password", key="adjust_api_token")
+    with acol2:
+        al_app_tokens_raw = st.text_input(
+            "App Token (cách nhau bởi dấu phẩy nếu nhiều app)", key="adjust_app_tokens"
+        )
+    with acol3:
+        st.write("")
+        st.write("")
+        al_fetch_clicked = st.button("Apply", type="primary", key="al_fetch", width="stretch")
+
+    st.markdown("**Ngưỡng cảnh báo** (chỉnh ngay không cần bấm Apply lại — không tốn thêm API)")
+    tcol1, tcol2, tcol3 = st.columns(3)
+    with tcol1:
+        al_min_installs = st.number_input(
+            "Installs tối thiểu để xét (lọc campaign quá nhỏ)",
+            min_value=0, value=30, step=10, key="al_min_installs",
+        )
+    with tcol2:
+        al_spike_pct = st.number_input(
+            "Ngưỡng \"đột biến\" (% lệch vs TB 7 ngày trước)",
+            min_value=5, value=30, step=5, key="al_spike_pct",
+        )
+    with tcol3:
+        al_decline_pct = st.number_input(
+            "Ngưỡng \"giảm dần\" (% đổi giữa 2 tuần liền kề)",
+            min_value=5, value=20, step=5, key="al_decline_pct",
+        )
+
+    if "al_daily_df" not in st.session_state:
+        st.session_state.al_daily_df = None
+        st.session_state.al_err = None
+        st.session_state.al_warning = None
+
+    if al_fetch_clicked:
+        adjust_df, adjust_err, adjust_warning = load_adjust_data(
+            al_days_back, al_app_tokens_raw, al_api_token, include_today=False
+        )
+        st.session_state.al_warning = adjust_warning
+        if adjust_err:
+            st.session_state.al_err = adjust_err
+            st.session_state.al_daily_df = None
+        else:
+            st.session_state.al_err = None
+            st.session_state.al_daily_df = calerts.build_campaign_daily(adjust_df, al_product_id)
+
+    if st.session_state.al_err:
+        st.error(f"❌ {st.session_state.al_err}")
+    if st.session_state.al_warning:
+        st.warning(f"⚠️ Adjust cảnh báo: {st.session_state.al_warning}")
+
+    if st.session_state.al_daily_df is None:
+        st.info("👆 Chọn app + khoảng ngày, nhập token Adjust rồi bấm **Apply** để bắt đầu.")
+        return
+    if st.session_state.al_daily_df.empty:
+        st.warning("Không có dữ liệu campaign nào cho app/khoảng ngày này.")
+        return
+
+    analysis = calerts.analyze_campaigns(
+        st.session_state.al_daily_df,
+        min_installs=int(al_min_installs),
+        spike_threshold_pct=float(al_spike_pct),
+        decline_threshold_pct=float(al_decline_pct),
+    )
+
+    if analysis.empty:
+        st.warning(
+            "Không có campaign nào đủ installs tối thiểu để xét — thử giảm "
+            "\"Installs tối thiểu\" hoặc kéo khoảng ngày dài hơn."
+        )
+        return
+
+    n_alert = (analysis["Cảnh báo"] != "Bình thường").sum()
+    kcol1, kcol2 = st.columns(2)
+    kcol1.metric("Campaign đang xét", len(analysis))
+    kcol2.metric("Có cảnh báo", int(n_alert))
+
+    st.dataframe(
+        analysis, width="stretch", hide_index=True,
+        column_config={
+            "CPI gần nhất": st.column_config.NumberColumn(format="$%.4f"),
+            "CPI % lệch vs TB 7 ngày trước": st.column_config.NumberColumn(format="%.1f%%"),
+            "ROAS D0 gần nhất": st.column_config.NumberColumn(format="percent"),
+            "ROAS D0 % lệch vs TB 7 ngày trước": st.column_config.NumberColumn(format="%.1f%%"),
+            "CPI % đổi (7 ngày vs 7 ngày trước đó)": st.column_config.NumberColumn(format="%.1f%%"),
+            "ROAS D0 % đổi (7 ngày vs 7 ngày trước đó)": st.column_config.NumberColumn(format="%.1f%%"),
+        },
+    )
+    st.caption(
+        "🔴 = xấu rõ rệt (CPI tăng vọt / ROAS D0 tụt vọt) · 🟢 = tốt bất thường "
+        "(nên kiểm tra lại không phải lỗi tracking) · 🟠 = xu hướng xấu kéo dài "
+        "nhiều ngày (không phải giật cục 1 ngày). Cột trống = chưa đủ dữ liệu "
+        "lịch sử để so sánh (cần kéo khoảng ngày dài hơn)."
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════
 # Điều hướng — API GỐC của Streamlit (st.navigation), có icon + nhóm danh mục
 # ══════════════════════════════════════════════════════════════════════
 pg = st.navigation(
@@ -867,6 +991,7 @@ pg = st.navigation(
         "": [
             st.Page(page_adjust, title="Dashboard", icon=":material/monitoring:", default=True),
             st.Page(page_meta_adjust, title="Meta + Adjust", icon=":material/join_inner:"),
+            st.Page(page_alerts, title="Cảnh báo", icon=":material/warning:"),
         ],
         "BigQuery": [
             st.Page(page_report_builder, title="Report Builder", icon=":material/tune:"),

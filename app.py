@@ -765,6 +765,27 @@ def page_meta_adjust():
         "đã dừng bên Meta nhưng vẫn còn install trả về (attribution trễ)."
     )
 
+    # PL2 TỔNG — cộng dồn TOÀN BỘ spend (BigQuery) và TOÀN BỘ ad_revenue (Adjust)
+    # ĐỘC LẬP với nhau (fillna 0), KHÔNG chỉ tính trên phần "Khớp cả 2 nguồn".
+    # Vì spend/ad_revenue là số CỘNG DỒN được (không phải tỉ lệ), tổng đúng theo
+    # cách này dù match rate < 100% — khác với PL2 ở TỪNG DÒNG bên dưới (cột đó
+    # chỉ ra số ở đúng dòng khớp cả 2 nguồn, để soi campaign/ngày/quốc gia cụ thể).
+    # spend là cột NUMERIC từ BigQuery → pandas đọc thành Decimal, phải ép về
+    # float trước khi trừ với ad_revenue (float, từ Adjust) — tránh TypeError
+    # Decimal - float (đã gặp lỗi thật khi test).
+    total_spend = pd.to_numeric(merged["spend"], errors="coerce").fillna(0).sum()
+    total_ad_revenue = pd.to_numeric(merged["ad_revenue"], errors="coerce").fillna(0).sum()
+    total_pl2 = total_ad_revenue - total_spend
+    pcol1, pcol2, pcol3 = st.columns(3)
+    pcol1.metric("Tổng chi phí (BigQuery)", f"${total_spend:,.2f}")
+    pcol2.metric("Tổng doanh thu ads (Adjust)", f"${total_ad_revenue:,.2f}")
+    pcol3.metric("Lãi marketing tổng (PL2)", f"${total_pl2:,.2f}")
+    st.caption(
+        "PL2 tổng = TOÀN BỘ doanh thu ads − TOÀN BỘ chi phí trong khoảng ngày đã "
+        "chọn (không phụ thuộc tỉ lệ khớp ghép ở trên) · chưa gồm doanh thu IAP "
+        "(đã loại vì tracking sai trước đó, xem GHI_CHU_TIEN_DO.md)."
+    )
+
     fstatus_col, fsearch_col = st.columns([1, 2])
     with fstatus_col:
         status_filter = st.multiselect(
@@ -789,7 +810,7 @@ def page_meta_adjust():
             "installs", "installs_adjust", "cpi", "cpi_adjust",
             "arpu_d0", "roas_ad_d0", "roas_ad_d7", "roas_ad_d30",
             "retention_rate_d1", "retention_rate_d7", "ad_revenue",
-            "Trạng thái ghép",
+            "Lãi marketing (PL2)", "Trạng thái ghép",
         ] if c in view.columns
     ]
     st.dataframe(
@@ -809,7 +830,13 @@ def page_meta_adjust():
             "retention_rate_d1": st.column_config.NumberColumn("Retention D1", format="percent"),
             "retention_rate_d7": st.column_config.NumberColumn("Retention D7", format="percent"),
             "ad_revenue": st.column_config.NumberColumn("Ad Revenue (Adjust)", format="$%.2f"),
+            "Lãi marketing (PL2)": st.column_config.NumberColumn("Lãi marketing (PL2)", format="$%.2f"),
         },
+    )
+    st.caption(
+        "Cột \"Lãi marketing (PL2)\" ở TỪNG DÒNG chỉ tính được khi \"Trạng thái "
+        "ghép\" = Khớp cả 2 nguồn (để trống nếu thiếu 1 trong 2 vế) — muốn xem "
+        "PL2 CỘNG DỒN đúng (không phụ thuộc match rate), xem 3 ô KPI phía trên."
     )
     st.caption(
         "Installs/CPI \"(Meta/BQ)\" là số Meta tự báo cáo (network-reported). "

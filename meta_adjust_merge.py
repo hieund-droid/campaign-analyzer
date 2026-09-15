@@ -107,4 +107,20 @@ def merge_meta_adjust(bq_df: pd.DataFrame, adjust_prepared: pd.DataFrame) -> pd.
 
     status_map = {"left_only": "Chỉ có ở BigQuery (Meta)", "right_only": "Chỉ có ở Adjust", "both": "Khớp cả 2 nguồn"}
     merged["Trạng thái ghép"] = merged["_merge"].map(status_map).fillna(status_map["left_only"])
-    return merged.drop(columns=["_merge"])
+    merged = merged.drop(columns=["_merge"])
+
+    # PL2 (lãi marketing) = ad_revenue (Adjust) − spend (BigQuery) — đã CHỐT với
+    # user (15/09/2026): chỉ tính doanh thu ads, KHÔNG cộng IAP (đã loại IAP cho
+    # AAP874 từ trước vì tracking sai, xem GHI_CHU_TIEN_DO.md). Dùng spend
+    # BigQuery (không phải network_cost Adjust) vì bảng ghép lấy campaign/CPM/CTR
+    # từ BigQuery làm gốc — nhất quán trong cùng 1 dòng.
+    # Ra NaN tự nhiên nếu 1 trong 2 vế thiếu (chỉ khớp cả 2 nguồn mới tính được
+    # đúng cho ĐÚNG dòng đó) — KHÔNG fillna(0) ở đây, để phân biệt rõ "không tính
+    # được" với "bằng 0 thật".
+    # BigQuery trả cột NUMERIC (spend) thành kiểu Decimal trong pandas — không
+    # trừ trực tiếp được với float (ad_revenue từ Adjust) — ép cả 2 về float64
+    # trước khi tính (đã gặp lỗi thật: TypeError Decimal - float).
+    ad_revenue_f = pd.to_numeric(merged["ad_revenue"], errors="coerce")
+    spend_f = pd.to_numeric(merged["spend"], errors="coerce")
+    merged["Lãi marketing (PL2)"] = ad_revenue_f - spend_f
+    return merged

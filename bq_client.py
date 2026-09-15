@@ -127,6 +127,44 @@ def fetch_campaign_trend(client: bigquery.Client, product_id: str, start: date, 
     return client.query(sql, job_config=job_config).to_dataframe()
 
 
+def fetch_campaign_detail(
+    client: bigquery.Client, product_id: str, start: date, end: date, channel: str = "Facebook"
+):
+    """Chi tiết theo TỪNG CAMPAIGN (không chỉ gộp cả channel như
+    fetch_campaign_by_channel) — dùng để ghép với Adjust theo campaign/day/
+    country. campaign_id ở đây LÀ cùng 1 số với số nằm trong ngoặc ở cuối tên
+    campaign bên Adjust (đã kiểm chứng bằng số thật 15/09/2026: 278/278
+    campaign_id BigQuery khớp 100% với Adjust — xem GHI_CHU_TIEN_DO.md)."""
+    sql = f"""
+        SELECT
+            day,
+            country,
+            campaign_id,
+            campaign_name,
+            SUM(spend) AS spend,
+            SUM(impressions) AS impressions,
+            SUM(clicks) AS clicks,
+            SUM(installs) AS installs,
+            SAFE_DIVIDE(SUM(spend), NULLIF(SUM(impressions), 0)) * 1000 AS cpm,
+            SAFE_DIVIDE(SUM(clicks), NULLIF(SUM(impressions), 0)) * 100 AS ctr_pct,
+            SAFE_DIVIDE(SUM(installs), NULLIF(SUM(clicks), 0)) * 100 AS cvr_pct,
+            SAFE_DIVIDE(SUM(spend), NULLIF(SUM(installs), 0)) AS cpi
+        FROM {VIEW_CAMPAIGN}
+        WHERE product_id = @product_id AND channel = @channel AND day BETWEEN @start AND @end
+        GROUP BY day, country, campaign_id, campaign_name
+        ORDER BY day, spend DESC
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("product_id", "STRING", product_id),
+            bigquery.ScalarQueryParameter("channel", "STRING", channel),
+            bigquery.ScalarQueryParameter("start", "DATE", start),
+            bigquery.ScalarQueryParameter("end", "DATE", end),
+        ]
+    )
+    return client.query(sql, job_config=job_config).to_dataframe()
+
+
 def fetch_admob_by_adunit(client: bigquery.Client, product_id: str, start: date, end: date):
     """eCPM blended theo ad unit — weighted theo impressions (AGENT-BRIEF.md Rule 1,
     phần eCPM — earnings không lộ ra, phải suy ngược qua impressions)."""

@@ -4,16 +4,22 @@ Streamlit, không tự chế bằng radio nữa) — cho icon + nhóm danh mục
 tool nội bộ khác của Apero. Việc thu/mở cả sidebar là tính năng có sẵn của
 Streamlit (không phải do code này), phần code cải thiện là icon + nhóm mục.
 
-3 trang, nhóm theo 2 danh mục:
-- "Dashboard" (mục lẻ, không thuộc danh mục nào): Adjust — installs, CPI, ad
-  revenue, ROAS D0/D7/D30, retention D1/D7, ARPU. MỖI NGƯỜI TỰ NHẬP API Token +
-  App Token của mình (mỗi người dùng account Adjust riêng) — không dùng chung
-  Secrets, chỉ lưu tạm trong session của họ.
+4 trang, nhóm theo 2 danh mục:
+- Mục lẻ (không thuộc danh mục nào):
+  - "Dashboard": Adjust — installs, CPI, ad revenue, ROAS D0/D7/D30, retention
+    D1/D7, ARPU. MỖI NGƯỜI TỰ NHẬP API Token + App Token của mình (mỗi người
+    dùng account Adjust riêng) — không dùng chung Secrets, chỉ lưu tạm trong
+    session của họ.
+  - "Meta + Adjust": ghép dữ liệu Meta (BigQuery, channel="Facebook") với
+    Adjust theo campaign + ngày + quốc gia — xem `meta_adjust_merge.py` để
+    biết cách ghép (đã kiểm chứng khớp 100% campaign_id bằng số thật). Vẫn
+    cần token Adjust cá nhân (dùng chung ô nhớ với trang Dashboard).
 - "BigQuery" (danh mục, 2 trang con — cả 2 đều lấy dữ liệu từ BigQuery):
   - "Report Builder": pivot AdMob linh hoạt kiểu AdMob console (tự chọn
     dimension: quốc gia/ad unit/định dạng + mốc thời gian), giới hạn trong 2
     metric + 3 dimension mà view BigQuery có. Đã bỏ trang "Tổng quan" cũ
-    (Meta/TikTok/Google Ads theo channel) theo yêu cầu user.
+    (Meta/TikTok/Google Ads theo channel) theo yêu cầu user — phần channel
+    Meta/CPM/CTR/CVR giờ nằm ở trang "Meta + Adjust" thay vì trang riêng.
   - "Market Board": eCPM từng quốc gia so với benchmark tự nhập cho từng app
     (màu 🟢/🔴) + sparkline xu hướng — xem `benchmarks.py`.
   Dùng 1 service account key CHUNG cho cả team (đọc từ Secrets khi deploy, hoặc
@@ -34,6 +40,7 @@ import adjust_client as ac
 import bq_client as bq
 import benchmarks as bm
 import country_meta as cmeta
+import meta_adjust_merge as mam
 
 load_dotenv()  # đọc .env khi chạy local — dùng cho GOOGLE_APPLICATION_CREDENTIALS
 
@@ -634,6 +641,184 @@ def page_market_board():
 
 
 # ══════════════════════════════════════════════════════════════════════
+# TRANG — Meta + Adjust (kênh Facebook: CPM/CTR/CVR, ghép Adjust theo
+# campaign/day/country — xem meta_adjust_merge.py để biết cách ghép)
+# ══════════════════════════════════════════════════════════════════════
+def page_meta_adjust():
+    st.title("Meta + Adjust")
+    st.caption(
+        "BigQuery cho biết phễu quảng cáo Meta (CPM/CTR/CVR) · Adjust cho biết "
+        "kết quả cuối (CPI/ARPU/ROAS/Retention) · Ghép theo campaign + ngày + quốc gia."
+    )
+
+    fcol1, fcol2 = st.columns(2)
+    with fcol1:
+        ma_product_id = st.selectbox("App (product_id)", bq.KNOWN_PRODUCT_IDS, key="ma_product")
+    with fcol2:
+        MA_DATE_PRESETS = {"7 ngày qua": 7, "14 ngày qua": 14, "30 ngày qua": 30}
+        ma_date_choice = st.selectbox("Khoảng ngày", list(MA_DATE_PRESETS.keys()), index=1, key="ma_date")
+        ma_days_back = MA_DATE_PRESETS[ma_date_choice]
+
+    st.caption(
+        "🔒 Cần token Adjust cá nhân (giống trang Dashboard — nếu đã nhập ở đó, "
+        "ô dưới đây tự điền sẵn vì dùng chung 1 ô nhớ trong phiên của bạn)."
+    )
+    acol1, acol2, acol3 = st.columns([2, 2, 1])
+    with acol1:
+        ma_api_token = st.text_input(
+            "API Token cá nhân (Adjust)", type="password", key="adjust_api_token"
+        )
+    with acol2:
+        ma_app_tokens_raw = st.text_input(
+            "App Token (cách nhau bởi dấu phẩy nếu nhiều app)", key="adjust_app_tokens"
+        )
+    with acol3:
+        st.write("")
+        st.write("")
+        ma_fetch_clicked = st.button("Apply", type="primary", key="ma_fetch", width="stretch")
+
+    if "ma_bq_df" not in st.session_state:
+        st.session_state.ma_bq_df = None
+        st.session_state.ma_channel_df = None
+        st.session_state.ma_trend_df = None
+        st.session_state.ma_merged = None
+        st.session_state.ma_err = None
+        st.session_state.ma_warning = None
+
+    if ma_fetch_clicked:
+        client, cerr = get_bq_client()
+        if cerr:
+            st.session_state.ma_err = cerr
+        else:
+            start, end = bq.get_date_range(ma_days_back)
+            try:
+                st.session_state.ma_bq_df = bq.fetch_campaign_detail(
+                    client, ma_product_id, start, end, channel="Facebook"
+                )
+                st.session_state.ma_channel_df = bq.fetch_campaign_by_channel(client, ma_product_id, start, end)
+                st.session_state.ma_trend_df = bq.fetch_campaign_trend(client, ma_product_id, start, end)
+            except Exception as e:  # noqa: BLE001
+                st.session_state.ma_err = f"Lỗi query BigQuery: {e}"
+                st.session_state.ma_bq_df = None
+
+            adjust_df, adjust_err, adjust_warning = load_adjust_data(
+                ma_days_back, ma_app_tokens_raw, ma_api_token, include_today=False
+            )
+            st.session_state.ma_warning = adjust_warning
+            if adjust_err:
+                st.session_state.ma_err = (st.session_state.ma_err + " | " if st.session_state.ma_err else "") + adjust_err
+                st.session_state.ma_merged = None
+            elif st.session_state.ma_bq_df is not None:
+                adjust_prepared = mam.prepare_adjust_for_merge(
+                    adjust_df if adjust_df is not None else pd.DataFrame(), ma_product_id
+                )
+                st.session_state.ma_merged = mam.merge_meta_adjust(st.session_state.ma_bq_df, adjust_prepared)
+
+    if st.session_state.ma_err:
+        st.error(f"❌ {st.session_state.ma_err}")
+    if st.session_state.ma_warning:
+        st.warning(f"⚠️ Adjust cảnh báo: {st.session_state.ma_warning}")
+
+    if st.session_state.ma_channel_df is None:
+        st.info("👆 Chọn app + khoảng ngày, nhập token Adjust rồi bấm **Apply** để bắt đầu.")
+        return
+
+    st.subheader("Tổng quan theo kênh (BigQuery)")
+    channel_df = st.session_state.ma_channel_df
+    if channel_df.empty:
+        st.warning("Không có dữ liệu kênh nào trong khoảng ngày này.")
+    else:
+        st.dataframe(
+            channel_df, width="stretch", hide_index=True,
+            column_config={
+                "cpm": st.column_config.NumberColumn("CPM", format="$%.2f"),
+                "ctr_pct": st.column_config.NumberColumn("CTR %", format="%.2f%%"),
+                "cvr_pct": st.column_config.NumberColumn("CVR %", format="%.2f%%"),
+                "cpi": st.column_config.NumberColumn("CPI", format="$%.4f"),
+            },
+        )
+        trend_df = st.session_state.ma_trend_df
+        if trend_df is not None and not trend_df.empty:
+            st.caption("Xu hướng spend/installs theo ngày (gộp mọi kênh).")
+            trend_indexed = trend_df.set_index("day")
+            if len(trend_indexed) < 2:
+                st.dataframe(trend_indexed, width="stretch")
+            else:
+                st.line_chart(trend_indexed)
+
+    st.divider()
+    st.subheader("Ghép Meta (Facebook) + Adjust theo campaign/ngày/quốc gia")
+
+    merged = st.session_state.ma_merged
+    if merged is None or merged.empty:
+        st.warning("Chưa có dữ liệu ghép — kiểm tra token Adjust hoặc khoảng ngày đã chọn.")
+        return
+
+    status_counts = merged["Trạng thái ghép"].value_counts()
+    scol1, scol2, scol3 = st.columns(3)
+    scol1.metric("Khớp cả 2 nguồn", int(status_counts.get("Khớp cả 2 nguồn", 0)))
+    scol2.metric("Chỉ có ở BigQuery (Meta)", int(status_counts.get("Chỉ có ở BigQuery (Meta)", 0)))
+    scol3.metric("Chỉ có ở Adjust", int(status_counts.get("Chỉ có ở Adjust", 0)))
+    st.caption(
+        "\"Chỉ có ở BigQuery\" thường là campaign quá mới/ít traffic Adjust chưa "
+        "kịp ghi nhận trong khoảng ngày này. \"Chỉ có ở Adjust\" có thể là campaign "
+        "đã dừng bên Meta nhưng vẫn còn install trả về (attribution trễ)."
+    )
+
+    fstatus_col, fsearch_col = st.columns([1, 2])
+    with fstatus_col:
+        status_filter = st.multiselect(
+            "Trạng thái ghép", merged["Trạng thái ghép"].unique().tolist(), key="ma_status_filter"
+        )
+    with fsearch_col:
+        ma_campaign_search = st.text_input("Tìm campaign_id hoặc tên campaign", key="ma_campaign_search")
+
+    view = merged
+    if status_filter:
+        view = view[view["Trạng thái ghép"].isin(status_filter)]
+    if ma_campaign_search:
+        mask = view["campaign_id"].astype(str).str.contains(ma_campaign_search, case=False, na=False)
+        if "campaign_name" in view.columns:
+            mask = mask | view["campaign_name"].astype(str).str.contains(ma_campaign_search, case=False, na=False)
+        view = view[mask]
+
+    display_cols = [
+        c for c in [
+            "day", "country", "campaign_id", "campaign_name",
+            "spend", "impressions", "clicks", "cpm", "ctr_pct", "cvr_pct",
+            "installs", "installs_adjust", "cpi", "cpi_adjust",
+            "arpu_d0", "roas_ad_d0", "roas_ad_d7", "roas_ad_d30",
+            "retention_rate_d1", "retention_rate_d7", "ad_revenue",
+            "Trạng thái ghép",
+        ] if c in view.columns
+    ]
+    st.dataframe(
+        view[display_cols], width="stretch", hide_index=True,
+        column_config={
+            "cpm": st.column_config.NumberColumn("CPM (Meta)", format="$%.2f"),
+            "ctr_pct": st.column_config.NumberColumn("CTR % (Meta)", format="%.2f%%"),
+            "cvr_pct": st.column_config.NumberColumn("CVR % (Meta)", format="%.2f%%"),
+            "installs": st.column_config.NumberColumn("Installs (Meta/BQ)"),
+            "installs_adjust": st.column_config.NumberColumn("Installs (Adjust)"),
+            "cpi": st.column_config.NumberColumn("CPI (Meta/BQ)", format="$%.4f"),
+            "cpi_adjust": st.column_config.NumberColumn("CPI (Adjust)", format="$%.4f"),
+            "arpu_d0": st.column_config.NumberColumn("ARPU D0", format="$%.4f"),
+            "roas_ad_d0": st.column_config.NumberColumn("ROAS D0", format="percent"),
+            "roas_ad_d7": st.column_config.NumberColumn("ROAS D7", format="percent"),
+            "roas_ad_d30": st.column_config.NumberColumn("ROAS D30", format="percent"),
+            "retention_rate_d1": st.column_config.NumberColumn("Retention D1", format="percent"),
+            "retention_rate_d7": st.column_config.NumberColumn("Retention D7", format="percent"),
+            "ad_revenue": st.column_config.NumberColumn("Ad Revenue (Adjust)", format="$%.2f"),
+        },
+    )
+    st.caption(
+        "Installs/CPI \"(Meta/BQ)\" là số Meta tự báo cáo (network-reported). "
+        "Installs/CPI \"(Adjust)\" là số MMP đo được (thường chính xác hơn cho "
+        "attribution) — 2 số có thể lệch nhau, đây là bình thường."
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════
 # Điều hướng — API GỐC của Streamlit (st.navigation), có icon + nhóm danh mục
 # ══════════════════════════════════════════════════════════════════════
 pg = st.navigation(
@@ -645,14 +830,16 @@ pg = st.navigation(
         # tự có sẵn, không cần tự vẽ thêm).
         #
         # "Market Board" và "Report Builder" đều lấy dữ liệu từ BigQuery — xếp
-        # chung nhóm BigQuery cho ĐÚNG nguồn dữ liệu. Chỉ "Dashboard" (Adjust)
-        # khác nguồn nên tách riêng. Đã bỏ hẳn trang "Tổng quan" (Meta/TikTok/
-        # Google Ads theo channel) theo yêu cầu user — chỉ còn Report Builder.
+        # chung nhóm BigQuery cho ĐÚNG nguồn dữ liệu. "Dashboard" (Adjust) và
+        # "Meta + Adjust" (ghép cả 2 nguồn) không thuộc riêng BigQuery nên để
+        # ở mục lẻ, cùng 1 danh sách "" (KHÔNG được lặp key "" 2 lần — dict
+        # Python sẽ ghi đè mất mục đầu, đã gặp lỗi này khi thêm trang mới).
         #
         # Icon dùng Material Symbols (nét viền tối giản) — theo đúng phong cách
         # ảnh mẫu user gửi.
         "": [
             st.Page(page_adjust, title="Dashboard", icon=":material/monitoring:", default=True),
+            st.Page(page_meta_adjust, title="Meta + Adjust", icon=":material/join_inner:"),
         ],
         "BigQuery": [
             st.Page(page_report_builder, title="Report Builder", icon=":material/tune:"),

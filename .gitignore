@@ -6,3 +6,7 @@ venv/
 *.db
 *.sqlite3
 .streamlit/secrets.toml
+credentials/
+AGENT-BRIEF.md
+market_benchmarks.json
+doctor_benchmarks.json

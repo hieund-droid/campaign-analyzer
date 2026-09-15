@@ -18,6 +18,11 @@ Streamlit (không phải do code này), phần code cải thiện là icon + nh�
   - "Cảnh báo": phát hiện CPI tăng đột biến / ROAS D0 tụt đột biến / xu hướng
     giảm dần kéo dài, theo TỪNG CAMPAIGN — chỉ dùng Adjust (không cần ghép
     BigQuery, áp dụng mọi channel) — xem `campaign_alerts.py`.
+  - "Chẩn đoán" (Campaign Doctor): chọn 1 campaign đang bị cảnh báo (đọc từ
+    trang Cảnh báo) → chẩn đoán tầng 1 (CPI đắt/User kém, so benchmark tự
+    nhập) → tầng 2 (CPM/CTR/CVR so peer nếu CPI đắt; Retention/ROAS nếu User
+    kém) → gợi ý hành động → cắt lát theo quốc gia + creative — xem
+    `campaign_doctor.py`.
 - "BigQuery" (danh mục, 2 trang con — cả 2 đều lấy dữ liệu từ BigQuery):
   - "Report Builder": pivot AdMob linh hoạt kiểu AdMob console (tự chọn
     dimension: quốc gia/ad unit/định dạng + mốc thời gian), giới hạn trong 2
@@ -46,6 +51,7 @@ import benchmarks as bm
 import country_meta as cmeta
 import meta_adjust_merge as mam
 import campaign_alerts as calerts
+import campaign_doctor as cdoc
 
 load_dotenv()  # đọc .env khi chạy local — dùng cho GOOGLE_APPLICATION_CREDENTIALS
 
@@ -143,6 +149,32 @@ def load_adjust_data(days_back: int, app_tokens_raw: str, api_token: str, includ
 
     warning_msg = ac.extract_warnings(data)
 
+    rows = data.get("rows") or []
+    if not rows:
+        return pd.DataFrame(), None, warning_msg
+
+    df = pd.DataFrame(rows)
+    for col in ac.SUMMABLE_COLS + ac.RATIO_COLS:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df, None, warning_msg
+
+
+@st.cache_data(ttl=15 * 60, show_spinner="Đang lấy dữ liệu creative từ Adjust...")
+def load_creative_data(days_back: int, app_tokens_raw: str, api_token: str):
+    """Dùng cho trang Chẩn đoán — cắt lát theo creative. Gọi RIÊNG (không chung
+    với load_adjust_data) vì dimension khác (campaign,creative_network, KHÔNG
+    có day/country) — xem adjust_client.fetch_creative_summary()."""
+    if not api_token or not app_tokens_raw:
+        return None, "Thiếu API Token / App Token.", None
+
+    app_tokens = ac.parse_app_tokens(app_tokens_raw)
+    try:
+        data = ac.fetch_creative_summary(api_token, app_tokens, days_back=days_back, exit_on_error=False)
+    except Exception as e:  # noqa: BLE001
+        return None, f"Lỗi gọi Adjust API: {e}", None
+
+    warning_msg = ac.extract_warnings(data)
     rows = data.get("rows") or []
     if not rows:
         return pd.DataFrame(), None, warning_msg
@@ -904,6 +936,9 @@ def page_alerts():
 
     if "al_daily_df" not in st.session_state:
         st.session_state.al_daily_df = None
+        st.session_state.al_raw_df = None
+        st.session_state.al_product_used = None
+        st.session_state.al_days_back_used = None
         st.session_state.al_err = None
         st.session_state.al_warning = None
 
@@ -918,6 +953,12 @@ def page_alerts():
         else:
             st.session_state.al_err = None
             st.session_state.al_daily_df = calerts.build_campaign_daily(adjust_df, al_product_id)
+            # Lưu lại df thô (chưa gộp, còn đủ country/retention_rate_d1) + product_id/
+            # khoảng ngày đang dùng — trang "Chẩn đoán" tái sử dụng, KHÔNG gọi lại
+            # Adjust API và query BigQuery ĐÚNG CÙNG khoảng ngày này.
+            st.session_state.al_raw_df = adjust_df
+            st.session_state.al_product_used = al_product_id
+            st.session_state.al_days_back_used = al_days_back
 
     if st.session_state.al_err:
         st.error(f"❌ {st.session_state.al_err}")
@@ -937,6 +978,9 @@ def page_alerts():
         spike_threshold_pct=float(al_spike_pct),
         decline_threshold_pct=float(al_decline_pct),
     )
+    # Lưu lại để trang "Chẩn đoán" đọc danh sách campaign đang bị cảnh báo,
+    # không phải tính lại từ đầu.
+    st.session_state.al_analysis_df = analysis
 
     if analysis.empty:
         st.warning(
@@ -970,6 +1014,243 @@ def page_alerts():
 
 
 # ══════════════════════════════════════════════════════════════════════
+# TRANG — Chẩn đoán (Campaign Doctor): tầng 1 (CPI đắt vs User kém) + tầng 2
+# (nguyên nhân sâu) + gợi ý hành động + cắt lát theo quốc gia/creative
+# ══════════════════════════════════════════════════════════════════════
+def page_campaign_doctor():
+    st.title("Chẩn đoán")
+    st.caption(
+        "Chẩn đoán 1 campaign đang bị cảnh báo: CPI đắt hay User kém? Vì sao? "
+        "Nên làm gì? Quốc gia/creative nào đang kéo xuống?"
+    )
+
+    if st.session_state.get("al_analysis_df") is None or st.session_state.get("al_raw_df") is None:
+        st.info(
+            "👆 Vào trang **Cảnh báo** trước — chọn app + khoảng ngày, nhập token "
+            "Adjust, bấm **Apply** — rồi quay lại đây để chọn campaign cần chẩn đoán."
+        )
+        return
+
+    analysis_df = st.session_state.al_analysis_df
+    product_id = st.session_state.al_product_used
+    raw_df = st.session_state.al_raw_df
+    days_back_used = st.session_state.al_days_back_used
+
+    flagged = analysis_df[analysis_df["Cảnh báo"] != "Bình thường"]
+    if flagged.empty:
+        st.success(f"✅ App {product_id} hiện không có campaign nào bị cảnh báo — chưa cần chẩn đoán.")
+        return
+
+    campaign_options = flagged["Campaign"].tolist()
+    label_map = dict(zip(flagged["Campaign"], flagged["Cảnh báo"]))
+    selected_campaign = st.selectbox(
+        f"Chọn campaign cần chẩn đoán (app {product_id}, {len(campaign_options)} campaign đang bị cảnh báo)",
+        campaign_options,
+        format_func=lambda c: f"[{label_map[c]}] {c[:70]}{'...' if len(c) > 70 else ''}",
+        key="doc_selected_campaign",
+    )
+
+    st.markdown("**Benchmark \"bình thường\" cho app này** (tự nhập tay, dùng để so tầng 1)")
+    saved_bench = bm.get_doctor_benchmarks(product_id)
+    bcol1, bcol2, bcol3, bcol4 = st.columns(4)
+    with bcol1:
+        bench_cpi = st.number_input(
+            "CPI bình thường ($)", min_value=0.0, value=float(saved_bench.get("cpi") or 0.0),
+            step=0.001, format="%.4f", key="doc_bench_cpi",
+        )
+    with bcol2:
+        bench_roas = st.number_input(
+            "ROAS D0 bình thường (%, VD 15 = 15%)", min_value=0.0,
+            value=float((saved_bench.get("roas_d0") or 0.0) * 100), step=1.0, key="doc_bench_roas",
+        )
+    with bcol3:
+        bench_retention = st.number_input(
+            "Retention D1 bình thường (%, VD 25 = 25%)", min_value=0.0,
+            value=float((saved_bench.get("retention_d1") or 0.0) * 100), step=1.0, key="doc_bench_retention",
+        )
+    with bcol4:
+        doc_threshold = st.number_input(
+            "Ngưỡng lệch coi là có vấn đề (%)", min_value=5.0, value=20.0, step=5.0, key="doc_threshold"
+        )
+
+    if st.button("💾 Lưu benchmark cho app này", key="doc_save_bench"):
+        bm.save_doctor_benchmarks(
+            product_id, {"cpi": bench_cpi, "roas_d0": bench_roas / 100, "retention_d1": bench_retention / 100}
+        )
+        st.success(f"Đã lưu benchmark chẩn đoán cho {product_id}.")
+
+    benchmark = {"cpi": bench_cpi or None, "roas_d0": (bench_roas / 100) or None, "retention_d1": (bench_retention / 100) or None}
+
+    stats = cdoc.period_stats_for_campaign(raw_df, product_id, selected_campaign)
+    if stats is None:
+        st.warning("Không tìm thấy dữ liệu Adjust cho campaign này (có thể do đổi bộ lọc).")
+        return
+
+    tier1 = cdoc.diagnose_tier1(stats, benchmark, threshold_pct=doc_threshold)
+
+    st.divider()
+    st.subheader("Tầng 1 — CPI đắt hay User kém?")
+    tcol1, tcol2, tcol3 = st.columns(3)
+    tcol1.metric(
+        "CPI thực tế", fmt_money(stats["cpi"]),
+        delta=f"{tier1['cpi_pct_vs_bench']:.1f}% vs benchmark" if tier1["cpi_pct_vs_bench"] is not None else None,
+        delta_color="inverse",
+    )
+    tcol2.metric(
+        "ROAS D0 thực tế", fmt_percent(stats["roas_d0"]),
+        delta=f"{tier1['roas_pct_vs_bench']:.1f}% vs benchmark" if tier1["roas_pct_vs_bench"] is not None else None,
+    )
+    tcol3.metric(
+        "Retention D1 thực tế", fmt_percent(stats["retention_d1"]),
+        delta=f"{tier1['retention_pct_vs_bench']:.1f}% vs benchmark" if tier1["retention_pct_vs_bench"] is not None else None,
+    )
+
+    verdicts = []
+    if tier1["cpi_dat"]:
+        verdicts.append("🔴 **CPI đắt** — cao hơn benchmark quá ngưỡng.")
+    if tier1["user_kem"]:
+        verdicts.append("🔴 **User kém** — ROAS D0 và/hoặc Retention D1 thấp hơn benchmark quá ngưỡng.")
+    if not verdicts:
+        st.info(
+            "Chưa phát hiện vấn đề rõ rệt so với benchmark đã nhập (hoặc benchmark "
+            "đang để trống — nhập benchmark ở trên để chẩn đoán chính xác hơn)."
+        )
+    else:
+        for v in verdicts:
+            st.markdown(v)
+
+    suggestions = []
+
+    if tier1["cpi_dat"]:
+        st.divider()
+        st.subheader("Tầng 2 — Vì sao CPI đắt? (so với các campaign khác cùng app)")
+        campaign_id = mam.extract_campaign_id(selected_campaign)
+        if not campaign_id:
+            st.warning(
+                "Không trích được campaign_id từ tên campaign này (có thể không thuộc "
+                "Meta/Facebook) — không mổ xẻ được CPM/CTR/CVR."
+            )
+        else:
+            client, cerr = get_bq_client()
+            if cerr:
+                st.error(f"❌ {cerr}")
+            else:
+                start, end = bq.get_date_range(days_back_used)
+                try:
+                    bq_detail = bq.fetch_campaign_detail(client, product_id, start, end, channel="Facebook")
+                except Exception as e:  # noqa: BLE001
+                    bq_detail = None
+                    st.error(f"❌ Lỗi query BigQuery: {e}")
+
+                if bq_detail is not None and not bq_detail.empty:
+                    this_campaign_bq = bq_detail[bq_detail["campaign_id"].astype(str) == str(campaign_id)]
+                    peer_bq = bq_detail[bq_detail["campaign_id"].astype(str) != str(campaign_id)]
+                    if this_campaign_bq.empty:
+                        st.warning(
+                            "Không tìm thấy dữ liệu Meta cho campaign_id này trong khoảng "
+                            "ngày đã chọn — có thể campaign quá mới hoặc đã dừng từ trước."
+                        )
+                    else:
+                        this_stats = cdoc.aggregate_bq_rows(this_campaign_bq)
+                        peer_stats = cdoc.aggregate_bq_rows(peer_bq)
+                        pcol1, pcol2, pcol3 = st.columns(3)
+                        pcol1.metric(
+                            "CPM campaign này", f"${this_stats['cpm']:.2f}" if this_stats["cpm"] else "N/A",
+                            delta=f"peer TB: ${peer_stats['cpm']:.2f}" if peer_stats["cpm"] else None,
+                        )
+                        pcol2.metric(
+                            "CTR campaign này", f"{this_stats['ctr_pct']:.2f}%" if this_stats["ctr_pct"] else "N/A",
+                            delta=f"peer TB: {peer_stats['ctr_pct']:.2f}%" if peer_stats["ctr_pct"] else None,
+                        )
+                        pcol3.metric(
+                            "CVR campaign này", f"{this_stats['cvr_pct']:.2f}%" if this_stats["cvr_pct"] else "N/A",
+                            delta=f"peer TB: {peer_stats['cvr_pct']:.2f}%" if peer_stats["cvr_pct"] else None,
+                        )
+                        tier2_cpi = cdoc.diagnose_tier2_cpi(this_stats, peer_stats, threshold_pct=doc_threshold)
+                        if tier2_cpi["findings"]:
+                            for label, pct in tier2_cpi["findings"]:
+                                st.markdown(f"- **{label}** ({pct:+.1f}%)")
+                                suggestions.append(cdoc.SUGGESTION_TEXT[label])
+                        else:
+                            st.caption("CPM/CTR/CVR không lệch rõ rệt so với các campaign khác — CPI đắt có thể do nguyên nhân khác (VD cạnh tranh chung toàn thị trường).")
+
+    if tier1["user_kem"]:
+        st.divider()
+        st.subheader("Tầng 2 — Vì sao User kém? (giữ chân hay kiếm tiền?)")
+        if tier1["retention_kem"]:
+            st.markdown("- 🔴 **Retention D1 thấp** — vấn đề GIỮ CHÂN (user cài xong rồi bỏ sớm).")
+            suggestions.append(cdoc.SUGGESTION_TEXT["retention_kem"])
+        if tier1["roas_kem"] and not tier1["retention_kem"]:
+            st.markdown("- 🔴 **ROAS D0 thấp nhưng Retention ổn** — vấn đề KIẾM TIỀN (monetization).")
+            suggestions.append(cdoc.SUGGESTION_TEXT["roas_kem"])
+        elif tier1["roas_kem"]:
+            st.markdown("- 🔴 **ROAS D0 cũng thấp** — có thể vừa giữ chân kém vừa kiếm tiền kém.")
+            suggestions.append(cdoc.SUGGESTION_TEXT["roas_kem"])
+
+    if suggestions:
+        st.divider()
+        st.subheader("Gợi ý hành động")
+        for s in suggestions:
+            st.markdown(f"- {s}")
+
+    st.divider()
+    st.subheader("Cắt lát khoanh vùng")
+    slice_tab1, slice_tab2 = st.tabs(["Theo quốc gia", "Theo creative"])
+
+    with slice_tab1:
+        country_df = cdoc.country_slice(raw_df, product_id, selected_campaign)
+        if country_df.empty:
+            st.info("Không có dữ liệu theo quốc gia cho campaign này.")
+        else:
+            st.dataframe(
+                country_df, width="stretch", hide_index=True,
+                column_config={
+                    "CPI": st.column_config.NumberColumn(format="$%.4f"),
+                    "ROAS D0": st.column_config.NumberColumn(format="percent"),
+                    "Retention D1": st.column_config.NumberColumn(format="percent"),
+                },
+            )
+            st.caption("ROAS D0 thấp nhất lên đầu — nghi phạm chính. Đã bỏ quốc gia <5 installs (quá ít để có ý nghĩa).")
+
+    with slice_tab2:
+        st.caption("🔒 Cần token Adjust cá nhân (dùng chung ô nhớ với các trang khác).")
+        ccol1, ccol2 = st.columns([3, 1])
+        with ccol1:
+            st.text_input("API Token cá nhân (Adjust)", type="password", key="adjust_api_token")
+            st.text_input("App Token (cách nhau bởi dấu phẩy nếu nhiều app)", key="adjust_app_tokens")
+        with ccol2:
+            st.write("")
+            creative_fetch_clicked = st.button("Tải dữ liệu creative", key="doc_creative_fetch")
+
+        if creative_fetch_clicked:
+            creative_raw, creative_err, creative_warning = load_creative_data(
+                days_back_used, st.session_state.adjust_app_tokens, st.session_state.adjust_api_token
+            )
+            st.session_state.doc_creative_raw = creative_raw
+            st.session_state.doc_creative_err = creative_err
+
+        creative_raw = st.session_state.get("doc_creative_raw")
+        if st.session_state.get("doc_creative_err"):
+            st.error(f"❌ {st.session_state.doc_creative_err}")
+        elif creative_raw is None:
+            st.info("👆 Bấm **Tải dữ liệu creative** để xem creative nào đang kéo campaign này xuống.")
+        else:
+            creative_view = cdoc.creative_slice(creative_raw, selected_campaign)
+            if creative_view.empty:
+                st.warning("Không có dữ liệu creative cho campaign này trong khoảng ngày đã kéo.")
+            else:
+                st.dataframe(
+                    creative_view, width="stretch", hide_index=True,
+                    column_config={
+                        "CPI": st.column_config.NumberColumn(format="$%.4f"),
+                        "ROAS D0": st.column_config.NumberColumn(format="percent"),
+                        "Retention D1": st.column_config.NumberColumn(format="percent"),
+                    },
+                )
+                st.caption("ROAS D0 thấp nhất lên đầu — nghi phạm chính.")
+
+
+# ══════════════════════════════════════════════════════════════════════
 # Điều hướng — API GỐC của Streamlit (st.navigation), có icon + nhóm danh mục
 # ══════════════════════════════════════════════════════════════════════
 pg = st.navigation(
@@ -992,6 +1273,7 @@ pg = st.navigation(
             st.Page(page_adjust, title="Dashboard", icon=":material/monitoring:", default=True),
             st.Page(page_meta_adjust, title="Meta + Adjust", icon=":material/join_inner:"),
             st.Page(page_alerts, title="Cảnh báo", icon=":material/warning:"),
+            st.Page(page_campaign_doctor, title="Chẩn đoán", icon=":material/stethoscope:"),
         ],
         "BigQuery": [
             st.Page(page_report_builder, title="Report Builder", icon=":material/tune:"),

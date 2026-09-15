@@ -132,3 +132,18 @@ def fetch_app_totals(api_token: str, app_tokens: list, days_back: int = DAYS_BAC
     cộng dồn cột roas_ad_dN từ bảng chi tiết).
     """
     return call_adjust(api_token, app_tokens, "app", days_back, **kw)
+
+
+# Dùng cho "Chẩn đoán" (Campaign Doctor) — cắt lát theo CREATIVE. Đã kiểm chứng
+# trực tiếp (15/09/2026): "creative_network" là dimension THẬT, trả về đúng tên
+# file creative (VD "remix_19_456s2+458s1+459s1.mp4"), không phải giá trị rỗng/
+# "unknown" toàn bộ như lo ngại ban đầu. KHÔNG có "day" trong dimension này —
+# CỐ Ý, để Adjust tự tổng hợp đúng cho CẢ khoảng ngày (giống cách fetch_app_totals
+# dùng dimension="app" — không tự cộng dồn cột tỉ lệ từ bảng chi tiết).
+CREATIVE_DIMENSIONS = "app,campaign,creative_network"
+
+
+def fetch_creative_summary(api_token: str, app_tokens: list, days_back: int = DAYS_BACK_DEFAULT, **kw) -> dict:
+    """Tổng hợp theo creative (cho 1 hoặc nhiều campaign) — dùng để "cắt lát
+    khoanh vùng" xem creative nào đang kéo campaign xuống."""
+    return call_adjust(api_token, app_tokens, CREATIVE_DIMENSIONS, days_back, **kw)

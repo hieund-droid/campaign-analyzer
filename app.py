@@ -54,6 +54,7 @@ import country_meta as cmeta
 import meta_adjust_merge as mam
 import campaign_alerts as calerts
 import campaign_doctor as cdoc
+from streamlit_local_storage import LocalStorage
 
 load_dotenv()  # đọc .env khi chạy local — dùng cho GOOGLE_APPLICATION_CREDENTIALS
 
@@ -127,6 +128,78 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Sidebar CHUNG — token Adjust cá nhân. ĐẶT Ở NGOÀI mọi hàm trang (module-level,
+# chạy trước pg.run()) — module-level nghĩa là CHẠY LẠI ở ĐẦU script mỗi lần
+# rerun (kể cả khi chuyển trang trong st.navigation), nên hiện XUYÊN SUỐT mọi
+# trang, KHÔNG nằm bên trong 1 trang cụ thể. Trước đây mỗi trang có form nhập
+# token RIÊNG — tuy cùng chung 1 session_state key nên KHÔNG thật sự mất giá
+# trị khi đổi trang, nhưng user vẫn phải thấy/gõ lại nhiều form giống nhau,
+# gây cảm giác phải nhập lại (16/09/2026) — gộp về 1 chỗ duy nhất cho rõ ràng.
+#
+# Thêm streamlit-local-storage (cài theo yêu cầu user, đã xin phép trước khi
+# cài — xem GHI_CHU_TIEN_DO.md) để nhớ token qua cả lần ĐÓNG/MỞ LẠI trình
+# duyệt — lưu vào localStorage CỦA TRÌNH DUYỆT NGƯỜI DÙNG, không gửi lên
+# GitHub/server dùng chung, không ai khác xem được (đúng tinh thần "mỗi người
+# tự nhập, không dùng chung Secrets" đã chốt từ đầu dự án).
+# ══════════════════════════════════════════════════════════════════════
+local_storage = LocalStorage()
+
+if "adjust_api_token" not in st.session_state:
+    _saved_api_token = local_storage.getItem("adjust_api_token")
+    if _saved_api_token:
+        st.session_state["adjust_api_token"] = _saved_api_token
+if "adjust_app_tokens" not in st.session_state:
+    _saved_app_tokens = local_storage.getItem("adjust_app_tokens")
+    if _saved_app_tokens:
+        st.session_state["adjust_app_tokens"] = _saved_app_tokens
+
+with st.sidebar:
+    st.markdown("**🔑 Token Adjust cá nhân**")
+    st.caption("Dùng chung cho mọi trang — không phải nhập lại khi chuyển trang.")
+    if st.button("🔄 Tải token đã lưu (nếu tự động chưa điền)", key="reload_saved_token"):
+        # Dự phòng: bước "hỏi trình duyệt" (localStorage) chạy ngầm qua 1 component
+        # riêng, đôi khi cần thêm 1 nhịp rerun mới có kết quả ngay lần tải trang
+        # đầu tiên — CHƯA test được bằng trình duyệt thật (môi trường code không
+        # có trình duyệt), nên thêm nút này để người dùng tự bấm lại nếu ô token
+        # không tự điền sau khi mở lại app.
+        local_storage.refreshItems()
+        _saved_api_token = local_storage.getItem("adjust_api_token")
+        _saved_app_tokens = local_storage.getItem("adjust_app_tokens")
+        if _saved_api_token:
+            st.session_state["adjust_api_token"] = _saved_api_token
+        if _saved_app_tokens:
+            st.session_state["adjust_app_tokens"] = _saved_app_tokens
+        if not _saved_api_token and not _saved_app_tokens:
+            st.caption("Chưa có token nào được lưu trên trình duyệt này.")
+    st.text_input(
+        "API Token",
+        type="password",
+        help='Adjust → Settings góc dưới trái → Account settings → tab "My profile" → API Token',
+        key="adjust_api_token",
+    )
+    st.text_input(
+        "App Token (cách nhau bởi dấu phẩy nếu nhiều app)",
+        help='Adjust → mở app → Cài đặt app → "App Token" (~12 ký tự)',
+        key="adjust_app_tokens",
+    )
+    _remember = st.checkbox(
+        "Ghi nhớ trên trình duyệt này (khỏi nhập lại lần sau)",
+        value=bool(local_storage.getItem("adjust_api_token") or local_storage.getItem("adjust_app_tokens")),
+        key="adjust_remember_browser",
+    )
+    if _remember:
+        if st.session_state.get("adjust_api_token") and local_storage.getItem("adjust_api_token") != st.session_state["adjust_api_token"]:
+            local_storage.setItem("adjust_api_token", st.session_state["adjust_api_token"], key="save_adjust_api_token")
+        if st.session_state.get("adjust_app_tokens") and local_storage.getItem("adjust_app_tokens") != st.session_state["adjust_app_tokens"]:
+            local_storage.setItem("adjust_app_tokens", st.session_state["adjust_app_tokens"], key="save_adjust_app_tokens")
+    else:
+        if local_storage.getItem("adjust_api_token"):
+            local_storage.deleteItem("adjust_api_token", key="del_adjust_api_token")
+        if local_storage.getItem("adjust_app_tokens"):
+            local_storage.deleteItem("adjust_app_tokens", key="del_adjust_app_tokens")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -255,21 +328,11 @@ def get_bq_client():
 # ══════════════════════════════════════════════════════════════════════
 def page_adjust():
     st.title("Adjust")
-    st.caption("🔒 Token chỉ lưu trong phiên của bạn — mỗi người tự nhập.")
-    col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
-    with col1:
-        user_api_token = st.text_input(
-            "API Token cá nhân (Adjust)",
-            type="password",
-            help='Adjust → Settings góc dưới trái → Account settings → tab "My profile" → API Token',
-            key="adjust_api_token",
-        )
-    with col2:
-        user_app_tokens_raw = st.text_input(
-            "App Token (cách nhau bởi dấu phẩy nếu nhiều app)",
-            help='Adjust → mở app → Cài đặt app → "App Token" (~12 ký tự)',
-            key="adjust_app_tokens",
-        )
+    st.caption("🔒 Nhập token ở sidebar bên trái (dùng chung cho mọi trang).")
+    user_api_token = st.session_state.get("adjust_api_token", "")
+    user_app_tokens_raw = st.session_state.get("adjust_app_tokens", "")
+
+    col3, col4 = st.columns([3, 1])
     with col3:
         ADJUST_DATE_PRESETS = {
             "Hôm nay (đang chạy, chưa chốt)": (1, True),
@@ -769,23 +832,10 @@ def page_meta_adjust():
         ma_date_choice = st.selectbox("Khoảng ngày", list(MA_DATE_PRESETS.keys()), index=1, key="ma_date")
         ma_days_back = MA_DATE_PRESETS[ma_date_choice]
 
-    st.caption(
-        "🔒 Cần token Adjust cá nhân (giống trang Adjust — nếu đã nhập ở đó, "
-        "ô dưới đây tự điền sẵn vì dùng chung 1 ô nhớ trong phiên của bạn)."
-    )
-    acol1, acol2, acol3 = st.columns([2, 2, 1])
-    with acol1:
-        ma_api_token = st.text_input(
-            "API Token cá nhân (Adjust)", type="password", key="adjust_api_token"
-        )
-    with acol2:
-        ma_app_tokens_raw = st.text_input(
-            "App Token (cách nhau bởi dấu phẩy nếu nhiều app)", key="adjust_app_tokens"
-        )
-    with acol3:
-        st.write("")
-        st.write("")
-        ma_fetch_clicked = st.button("Apply", type="primary", key="ma_fetch", width="stretch")
+    ma_api_token = st.session_state.get("adjust_api_token", "")
+    ma_app_tokens_raw = st.session_state.get("adjust_app_tokens", "")
+    st.caption("🔒 Cần token Adjust cá nhân — nhập ở sidebar bên trái.")
+    ma_fetch_clicked = st.button("Apply", type="primary", key="ma_fetch")
 
     if "ma_bq_df" not in st.session_state:
         st.session_state.ma_bq_df = None
@@ -976,18 +1026,10 @@ def page_alerts():
         )
         al_days_back = AL_DATE_PRESETS[al_date_choice]
 
-    st.caption("🔒 Cần token Adjust cá nhân (dùng chung ô nhớ với trang Adjust/Meta + Adjust).")
-    acol1, acol2, acol3 = st.columns([2, 2, 1])
-    with acol1:
-        al_api_token = st.text_input("API Token cá nhân (Adjust)", type="password", key="adjust_api_token")
-    with acol2:
-        al_app_tokens_raw = st.text_input(
-            "App Token (cách nhau bởi dấu phẩy nếu nhiều app)", key="adjust_app_tokens"
-        )
-    with acol3:
-        st.write("")
-        st.write("")
-        al_fetch_clicked = st.button("Apply", type="primary", key="al_fetch", width="stretch")
+    al_api_token = st.session_state.get("adjust_api_token", "")
+    al_app_tokens_raw = st.session_state.get("adjust_app_tokens", "")
+    st.caption("🔒 Cần token Adjust cá nhân — nhập ở sidebar bên trái.")
+    al_fetch_clicked = st.button("Apply", type="primary", key="al_fetch")
 
     st.markdown("**Ngưỡng cảnh báo** (chỉnh ngay không cần bấm Apply lại — không tốn thêm API)")
     tcol1, tcol2, tcol3 = st.columns(3)
@@ -1286,18 +1328,14 @@ def page_campaign_doctor():
             st.caption("ROAS D0 thấp nhất lên đầu — nghi phạm chính. Đã bỏ quốc gia <5 installs (quá ít để có ý nghĩa).")
 
     with slice_tab2:
-        st.caption("🔒 Cần token Adjust cá nhân (dùng chung ô nhớ với các trang khác).")
-        ccol1, ccol2 = st.columns([3, 1])
-        with ccol1:
-            st.text_input("API Token cá nhân (Adjust)", type="password", key="adjust_api_token")
-            st.text_input("App Token (cách nhau bởi dấu phẩy nếu nhiều app)", key="adjust_app_tokens")
-        with ccol2:
-            st.write("")
-            creative_fetch_clicked = st.button("Tải dữ liệu creative", key="doc_creative_fetch")
+        st.caption("🔒 Cần token Adjust cá nhân — nhập ở sidebar bên trái.")
+        creative_fetch_clicked = st.button("Tải dữ liệu creative", key="doc_creative_fetch")
 
         if creative_fetch_clicked:
             creative_raw, creative_err, creative_warning = load_creative_data(
-                days_back_used, st.session_state.adjust_app_tokens, st.session_state.adjust_api_token
+                days_back_used,
+                st.session_state.get("adjust_app_tokens", ""),
+                st.session_state.get("adjust_api_token", ""),
             )
             st.session_state.doc_creative_raw = creative_raw
             st.session_state.doc_creative_err = creative_err

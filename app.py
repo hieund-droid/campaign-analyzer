@@ -979,10 +979,25 @@ def page_meta_adjust():
         if trend_df is not None and not trend_df.empty:
             st.caption("Xu hướng spend/installs theo ngày (gộp mọi kênh).")
             trend_indexed = trend_df.set_index("day")
+            # spend VÀ installs đều là cột NUMERIC từ BigQuery → pandas đọc thành
+            # Decimal (dtype "object"), Altair/Vega-Lite (dùng trong st.line_chart)
+            # vẽ SAI HẲN trục khi gặp cột kiểu Decimal (đã gặp lỗi thật: trục Y ra
+            # toàn số vô nghĩa như "6758000000000") — ép cả 2 về float trước khi vẽ.
+            trend_indexed["spend"] = pd.to_numeric(trend_indexed["spend"], errors="coerce")
+            trend_indexed["installs"] = pd.to_numeric(trend_indexed["installs"], errors="coerce")
             if len(trend_indexed) < 2:
                 st.dataframe(trend_indexed, width="stretch")
             else:
-                st.line_chart(trend_indexed)
+                # Tách riêng installs và spend — 2 cái lệch quá xa về độ lớn (installs
+                # hàng chục nghìn, spend vài nghìn đô), chung 1 biểu đồ sẽ bẹp 1 đường
+                # (giống lỗi đã sửa ở trang Adjust).
+                tcol1, tcol2 = st.columns(2)
+                with tcol1:
+                    st.caption("Installs")
+                    st.line_chart(trend_indexed[["installs"]])
+                with tcol2:
+                    st.caption("Spend ($)")
+                    st.line_chart(trend_indexed[["spend"]])
 
     st.divider()
     st.subheader("Ghép Meta (Facebook) + Adjust theo campaign/ngày/quốc gia")

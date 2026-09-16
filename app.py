@@ -1233,7 +1233,9 @@ def page_alerts():
     st.caption(
         "So lần chụp ĐẦU TIÊN hôm nay (thường = sáng) với lần MỚI NHẤT (thường = "
         "bây giờ) — tự động chụp mỗi khi ai đó xem trang này hoặc trang Adjust với "
-        f"\"Hôm nay\" (cách nhau ≥{csnap.MIN_INTERVAL_HOURS} tiếng)."
+        f"\"Hôm nay\" (cách nhau ≥{csnap.MIN_INTERVAL_HOURS} tiếng). Theo dõi CẢ 3: "
+        "CPI (chi phí), LTV/ARPU D0 (giá trị user), ROAS D0 (= LTV ÷ CPI) — để "
+        "biết ROAS biến động là do chi phí đắt lên hay do giá trị user tụt xuống."
     )
     if not all_flagged_today:
         st.info(
@@ -1250,22 +1252,22 @@ def page_alerts():
             if f["roas_bad"]:
                 flags.append("🔴 ROAS D0 giảm")
             if f["arpu_bad"]:
-                flags.append("🔴 ARPU D0 giảm")
+                flags.append("🔴 LTV (ARPU D0) giảm")
             realtime_rows.append({
                 "Campaign": f["campaign"],
                 "Lần đầu hôm nay": f["first_ts"][11:16],
                 "Lần gần nhất": f["last_ts"][11:16],
                 "CPI % đổi": f["cpi_pct_change"],
+                "LTV (ARPU D0) % đổi": f["arpu_d0_pct_change"],
                 "ROAS D0 % đổi": f["roas_d0_pct_change"],
-                "ARPU D0 % đổi": f["arpu_d0_pct_change"],
                 "Cảnh báo": " · ".join(flags),
             })
         st.dataframe(
             pd.DataFrame(realtime_rows), width="stretch", hide_index=True,
             column_config={
                 "CPI % đổi": st.column_config.NumberColumn(format="%.1f%%"),
+                "LTV (ARPU D0) % đổi": st.column_config.NumberColumn(format="%.1f%%"),
                 "ROAS D0 % đổi": st.column_config.NumberColumn(format="%.1f%%"),
-                "ARPU D0 % đổi": st.column_config.NumberColumn(format="%.1f%%"),
             },
         )
 
@@ -1308,17 +1310,23 @@ def page_alerts():
         column_config={
             "CPI gần nhất": st.column_config.NumberColumn(format="$%.4f"),
             "CPI % lệch vs TB 7 ngày trước": st.column_config.NumberColumn(format="%.1f%%"),
+            "LTV (ARPU D0) gần nhất": st.column_config.NumberColumn(format="$%.4f"),
+            "LTV % lệch vs TB 7 ngày trước": st.column_config.NumberColumn(format="%.1f%%"),
             "ROAS D0 gần nhất": st.column_config.NumberColumn(format="percent"),
             "ROAS D0 % lệch vs TB 7 ngày trước": st.column_config.NumberColumn(format="%.1f%%"),
             "CPI % đổi (7 ngày vs 7 ngày trước đó)": st.column_config.NumberColumn(format="%.1f%%"),
+            "LTV % đổi (7 ngày vs 7 ngày trước đó)": st.column_config.NumberColumn(format="%.1f%%"),
             "ROAS D0 % đổi (7 ngày vs 7 ngày trước đó)": st.column_config.NumberColumn(format="%.1f%%"),
         },
     )
     st.caption(
-        "🔴 = xấu rõ rệt (CPI tăng vọt / ROAS D0 tụt vọt) · 🟢 = tốt bất thường "
-        "(nên kiểm tra lại không phải lỗi tracking) · 🟠 = xu hướng xấu kéo dài "
-        "nhiều ngày (không phải giật cục 1 ngày). Cột trống = chưa đủ dữ liệu "
-        "lịch sử để so sánh (cần kéo khoảng ngày dài hơn)."
+        "LTV = ARPU D0 (doanh thu/install tính tới D0) — tách riêng khỏi ROAS D0 "
+        "để biết ROAS biến động là do CPI (chi phí) hay do LTV (giá trị user) — "
+        "ROAS D0 = LTV ÷ CPI, 1 mình ROAS không tách được 2 nguyên nhân này. "
+        "🔴 = xấu rõ rệt (CPI tăng vọt / LTV hoặc ROAS D0 tụt vọt) · 🟢 = tốt bất "
+        "thường (nên kiểm tra lại không phải lỗi tracking) · 🟠 = xu hướng xấu "
+        "kéo dài nhiều ngày (không phải giật cục 1 ngày). Cột trống = chưa đủ "
+        "dữ liệu lịch sử để so sánh (cần kéo khoảng ngày dài hơn)."
     )
 
 
@@ -1360,35 +1368,55 @@ def page_campaign_doctor():
     )
 
     st.markdown("**Benchmark \"bình thường\" cho app này** (tự nhập tay, dùng để so tầng 1)")
+    st.caption(
+        "Tách riêng ARPU D0 (LTV) khỏi ROAS D0 — ROAS D0 = LTV ÷ CPI, 1 mình ROAS "
+        "không biết được ROAS xấu là do CPI đắt lên hay do LTV tụt xuống."
+    )
     saved_bench = bm.get_doctor_benchmarks(product_id)
-    bcol1, bcol2, bcol3, bcol4 = st.columns(4)
+    bcol1, bcol2, bcol3, bcol4, bcol5 = st.columns(5)
     with bcol1:
         bench_cpi = st.number_input(
             "CPI bình thường ($)", min_value=0.0, value=float(saved_bench.get("cpi") or 0.0),
             step=0.001, format="%.4f", key="doc_bench_cpi",
         )
     with bcol2:
+        bench_arpu = st.number_input(
+            "LTV (ARPU D0) bình thường ($)", min_value=0.0, value=float(saved_bench.get("arpu_d0") or 0.0),
+            step=0.001, format="%.4f", key="doc_bench_arpu",
+        )
+    with bcol3:
         bench_roas = st.number_input(
             "ROAS D0 bình thường (%, VD 15 = 15%)", min_value=0.0,
             value=float((saved_bench.get("roas_d0") or 0.0) * 100), step=1.0, key="doc_bench_roas",
         )
-    with bcol3:
+    with bcol4:
         bench_retention = st.number_input(
             "Retention D1 bình thường (%, VD 25 = 25%)", min_value=0.0,
             value=float((saved_bench.get("retention_d1") or 0.0) * 100), step=1.0, key="doc_bench_retention",
         )
-    with bcol4:
+    with bcol5:
         doc_threshold = st.number_input(
             "Ngưỡng lệch coi là có vấn đề (%)", min_value=5.0, value=20.0, step=5.0, key="doc_threshold"
         )
 
     if st.button("💾 Lưu benchmark cho app này", key="doc_save_bench"):
         bm.save_doctor_benchmarks(
-            product_id, {"cpi": bench_cpi, "roas_d0": bench_roas / 100, "retention_d1": bench_retention / 100}
+            product_id,
+            {
+                "cpi": bench_cpi,
+                "arpu_d0": bench_arpu,
+                "roas_d0": bench_roas / 100,
+                "retention_d1": bench_retention / 100,
+            },
         )
         st.success(f"Đã lưu benchmark chẩn đoán cho {product_id}.")
 
-    benchmark = {"cpi": bench_cpi or None, "roas_d0": (bench_roas / 100) or None, "retention_d1": (bench_retention / 100) or None}
+    benchmark = {
+        "cpi": bench_cpi or None,
+        "arpu_d0": bench_arpu or None,
+        "roas_d0": (bench_roas / 100) or None,
+        "retention_d1": (bench_retention / 100) or None,
+    }
 
     stats = cdoc.period_stats_for_campaign(raw_df, product_id, selected_campaign)
     if stats is None:
@@ -1399,17 +1427,21 @@ def page_campaign_doctor():
 
     st.divider()
     st.subheader("Tầng 1 — CPI đắt hay User kém?")
-    tcol1, tcol2, tcol3 = st.columns(3)
+    tcol1, tcol2, tcol3, tcol4 = st.columns(4)
     tcol1.metric(
         "CPI thực tế", fmt_money(stats["cpi"]),
         delta=f"{tier1['cpi_pct_vs_bench']:.1f}% vs benchmark" if tier1["cpi_pct_vs_bench"] is not None else None,
         delta_color="inverse",
     )
     tcol2.metric(
+        "LTV (ARPU D0) thực tế", fmt_money(stats.get("arpu_d0")),
+        delta=f"{tier1['arpu_pct_vs_bench']:.1f}% vs benchmark" if tier1["arpu_pct_vs_bench"] is not None else None,
+    )
+    tcol3.metric(
         "ROAS D0 thực tế", fmt_percent(stats["roas_d0"]),
         delta=f"{tier1['roas_pct_vs_bench']:.1f}% vs benchmark" if tier1["roas_pct_vs_bench"] is not None else None,
     )
-    tcol3.metric(
+    tcol4.metric(
         "Retention D1 thực tế", fmt_percent(stats["retention_d1"]),
         delta=f"{tier1['retention_pct_vs_bench']:.1f}% vs benchmark" if tier1["retention_pct_vs_bench"] is not None else None,
     )
@@ -1418,7 +1450,14 @@ def page_campaign_doctor():
     if tier1["cpi_dat"]:
         verdicts.append("🔴 **CPI đắt** — cao hơn benchmark quá ngưỡng.")
     if tier1["user_kem"]:
-        verdicts.append("🔴 **User kém** — ROAS D0 và/hoặc Retention D1 thấp hơn benchmark quá ngưỡng.")
+        kem_parts = []
+        if tier1["arpu_kem"]:
+            kem_parts.append("LTV (ARPU D0)")
+        if tier1["retention_kem"]:
+            kem_parts.append("Retention D1")
+        if tier1["roas_kem"]:
+            kem_parts.append("ROAS D0")
+        verdicts.append(f"🔴 **User kém** — {', '.join(kem_parts)} thấp hơn benchmark quá ngưỡng.")
     if not verdicts:
         st.info(
             "Chưa phát hiện vấn đề rõ rệt so với benchmark đã nhập (hoặc benchmark "
@@ -1485,15 +1524,15 @@ def page_campaign_doctor():
 
     if tier1["user_kem"]:
         st.divider()
-        st.subheader("Tầng 2 — Vì sao User kém? (giữ chân hay kiếm tiền?)")
+        st.subheader("Tầng 2 — Vì sao User kém? (giữ chân hay giá trị/LTV?)")
         if tier1["retention_kem"]:
             st.markdown("- 🔴 **Retention D1 thấp** — vấn đề GIỮ CHÂN (user cài xong rồi bỏ sớm).")
             suggestions.append(cdoc.SUGGESTION_TEXT["retention_kem"])
-        if tier1["roas_kem"] and not tier1["retention_kem"]:
-            st.markdown("- 🔴 **ROAS D0 thấp nhưng Retention ổn** — vấn đề KIẾM TIỀN (monetization).")
-            suggestions.append(cdoc.SUGGESTION_TEXT["roas_kem"])
-        elif tier1["roas_kem"]:
-            st.markdown("- 🔴 **ROAS D0 cũng thấp** — có thể vừa giữ chân kém vừa kiếm tiền kém.")
+        if tier1["arpu_kem"]:
+            st.markdown("- 🔴 **LTV (ARPU D0) thấp** — vấn đề GIÁ TRỊ NGƯỜI DÙNG (ở lại nhưng không tạo đủ giá trị).")
+            suggestions.append(cdoc.SUGGESTION_TEXT["arpu_kem"])
+        if tier1["roas_kem"] and not tier1["retention_kem"] and not tier1["arpu_kem"]:
+            st.markdown("- 🔴 **ROAS D0 thấp** — nhưng LTV và Retention riêng lẻ đều chưa rõ nguyên nhân.")
             suggestions.append(cdoc.SUGGESTION_TEXT["roas_kem"])
 
     if suggestions:

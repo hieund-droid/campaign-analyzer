@@ -54,21 +54,23 @@ def save_product_benchmarks(product_id: str, country_values: dict) -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════
-# Benchmark cho "Chẩn đoán" (Campaign Doctor) — CPI/ROAS D0/Retention D1 MỖI
-# APP 1 mốc (KHÔNG chia theo quốc gia như eCPM ở trên — mục đích khác: phân
-# loại nhanh "CPI đắt" hay "User kém" ở tầng 1 chẩn đoán, không cần chi tiết
-# đến từng quốc gia ở bước này). File JSON RIÊNG với market_benchmarks.json để
-# không lẫn 2 loại benchmark khác mục đích. Cùng lưu ý CHƯA bền vững trên
-# Streamlit Cloud (xem cảnh báo ở đầu file).
+# Benchmark cho "Chẩn đoán" (Campaign Doctor) — CPI/ARPU D0 (LTV)/ROAS D0/
+# Retention D1 MỖI APP 1 mốc (KHÔNG chia theo quốc gia như eCPM ở trên — mục
+# đích khác: phân loại nhanh "CPI đắt" hay "User kém" ở tầng 1 chẩn đoán,
+# không cần chi tiết đến từng quốc gia ở bước này). Thêm `arpu_d0` (16/09/2026)
+# — user chỉ ra CPI+ROAS không đủ để biết ROAS biến động do CPI hay do LTV,
+# cần benchmark riêng cho LTV (= ARPU D0) để tách 2 nguyên nhân. File JSON
+# RIÊNG với market_benchmarks.json để không lẫn 2 loại benchmark khác mục
+# đích. Cùng lưu ý CHƯA bền vững trên Streamlit Cloud (xem cảnh báo ở đầu file).
 # ══════════════════════════════════════════════════════════════════════
 DOCTOR_BENCHMARK_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "doctor_benchmarks.json"
 )
-DOCTOR_BENCHMARK_KEYS = ["cpi", "roas_d0", "retention_d1"]
+DOCTOR_BENCHMARK_KEYS = ["cpi", "arpu_d0", "roas_d0", "retention_d1"]
 
 
 def load_doctor_benchmarks() -> dict:
-    """Trả về dict {product_id: {"cpi":..., "roas_d0":..., "retention_d1":...}}."""
+    """Trả về dict {product_id: {"cpi":..., "arpu_d0":..., "roas_d0":..., "retention_d1":...}}."""
     if os.path.exists(DOCTOR_BENCHMARK_FILE):
         try:
             with open(DOCTOR_BENCHMARK_FILE, "r", encoding="utf-8") as f:

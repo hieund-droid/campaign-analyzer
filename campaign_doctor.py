@@ -2,12 +2,17 @@
 "Campaign Doctor" — chẩn đoán 1 campaign cụ thể (đang bị cảnh báo ở trang
 "Cảnh báo") theo 2 tầng, gắn gợi ý hành động + cắt lát khoanh vùng.
 
-TẦNG 1 — CPI đắt vs User kém: so CPI/ROAS D0/Retention D1 của CHÍNH campaign
-(cộng dồn cả khoảng ngày, tính đúng cách — không trung bình cộng trực tiếp)
-với BENCHMARK do user tự nhập (xem benchmarks.py — get_doctor_benchmarks()).
+TẦNG 1 — CPI đắt vs User kém: so CPI/ARPU D0 (LTV)/ROAS D0/Retention D1 của
+CHÍNH campaign (cộng dồn cả khoảng ngày, tính đúng cách — không trung bình
+cộng trực tiếp) với BENCHMARK do user tự nhập (xem benchmarks.py —
+get_doctor_benchmarks()).
 - CPI đắt: CPI thực tế CAO HƠN benchmark quá `threshold_pct`%.
-- User kém: ROAS D0 HOẶC Retention D1 thực tế THẤP HƠN benchmark quá
-  `threshold_pct`% (1 trong 2 thấp là đủ để coi là "user kém").
+- User kém: ARPU D0 (LTV) HOẶC Retention D1 HOẶC ROAS D0 thực tế THẤP HƠN
+  benchmark quá `threshold_pct`% (1 trong 3 thấp là đủ để coi là "user kém").
+  Tách riêng ARPU D0 (= LTV tại D0) khỏi ROAS D0 — vì ROAS D0 = ARPU D0 ÷ CPI,
+  1 mình ROAS D0 KHÔNG tách được ROAS xấu là do CPI đắt lên hay do LTV tụt
+  xuống (user chỉ ra đúng vấn đề này 16/09/2026) — theo dõi cả 2 riêng biệt để
+  biết CHÍNH XÁC lever nào đang có vấn đề.
 Có thể vừa CPI đắt vừa User kém cùng lúc (2 vấn đề riêng biệt, không loại
 trừ nhau).
 
@@ -57,19 +62,26 @@ def period_stats_for_campaign(raw_adjust_df: pd.DataFrame, product_id: str, camp
         "installs": installs,
         "network_cost": cost,
         "cpi": (cost / installs) if installs else None,
+        "arpu_d0": (revenue_d0 / installs) if installs else None,
         "roas_d0": (revenue_d0 / cost) if cost else None,
         "retention_d1": (retained_d1 / installs) if installs else None,
     }
 
 
 def diagnose_tier1(stats: dict, benchmark: dict, threshold_pct: float = DEFAULT_THRESHOLD_PCT) -> dict:
-    """benchmark: {"cpi":.., "roas_d0":.., "retention_d1":..} — key nào None
-    (chưa nhập) thì BỎ QUA điều kiện đó (không tự đoán benchmark)."""
+    """benchmark: {"cpi":.., "arpu_d0":.., "roas_d0":.., "retention_d1":..} —
+    key nào None (chưa nhập) thì BỎ QUA điều kiện đó (không tự đoán benchmark)."""
     cpi_dat = False
     cpi_pct = None
     if stats.get("cpi") is not None and benchmark.get("cpi"):
         cpi_pct = (stats["cpi"] - benchmark["cpi"]) / benchmark["cpi"] * 100
         cpi_dat = cpi_pct > threshold_pct
+
+    arpu_pct = None
+    arpu_kem = False
+    if stats.get("arpu_d0") is not None and benchmark.get("arpu_d0"):
+        arpu_pct = (stats["arpu_d0"] - benchmark["arpu_d0"]) / benchmark["arpu_d0"] * 100
+        arpu_kem = arpu_pct < -threshold_pct
 
     roas_pct = None
     roas_kem = False
@@ -86,7 +98,9 @@ def diagnose_tier1(stats: dict, benchmark: dict, threshold_pct: float = DEFAULT_
     return {
         "cpi_dat": cpi_dat,
         "cpi_pct_vs_bench": cpi_pct,
-        "user_kem": roas_kem or retention_kem,
+        "user_kem": roas_kem or retention_kem or arpu_kem,
+        "arpu_kem": arpu_kem,
+        "arpu_pct_vs_bench": arpu_pct,
         "roas_kem": roas_kem,
         "roas_pct_vs_bench": roas_pct,
         "retention_kem": retention_kem,
@@ -210,7 +224,10 @@ SUGGESTION_TEXT = {
     "retention_kem": "Retention D1 thấp hơn benchmark → user cài xong rồi bỏ sớm — kiểm "
     "tra xem creative có đang hứa hẹn sai với trải nghiệm thật trong app không, hoặc "
     "xem lại phần onboarding.",
-    "roas_kem": "Retention ổn nhưng ROAS D0 thấp hơn benchmark → vấn đề có thể nằm ở khả "
-    "năng kiếm tiền (ít xem ads, hoặc quốc gia đang chạy có eCPM thấp) — xem thêm ở "
-    "Market Board theo quốc gia của campaign này.",
+    "arpu_kem": "LTV (ARPU D0) thấp hơn benchmark → user vẫn ở lại nhưng KHÔNG tạo ra "
+    "đủ giá trị (ít xem ads, hoặc quốc gia đang chạy có eCPM thấp) — khác với vấn đề "
+    "CPI đắt (chi phí), đây là vấn đề GIÁ TRỊ NGƯỜI DÙNG — xem thêm ở Market Board "
+    "theo quốc gia của campaign này để biết eCPM quốc gia đó có đang thấp không.",
+    "roas_kem": "ROAS D0 thấp hơn benchmark nhưng CPI và LTV riêng lẻ đều chưa rõ nguyên "
+    "nhân — có thể do kết hợp cả 2 lệch nhẹ cùng lúc, xem thêm chi tiết CPI/LTV ở trên.",
 }

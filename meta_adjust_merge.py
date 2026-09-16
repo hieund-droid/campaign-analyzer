@@ -30,6 +30,16 @@ import pandas as pd
 
 CAMPAIGN_ID_RE = re.compile(r"\((\d{6,25})\)\s*$")
 
+# Cột mà prepare_adjust_for_merge() LUÔN phải trả về (kể cả khi rỗng — VD token
+# Adjust sai/không khớp app nào) — để merge_meta_adjust() không bị KeyError khi
+# tìm "ad_revenue" (đã gặp lỗi thật trên Streamlit Cloud: user nhập nhầm
+# App Token → adjust_df rỗng → thiếu hẳn cột này → crash).
+ADJUST_MERGE_COLS = [
+    "day", "country", "campaign_id", "installs_adjust", "spend_adjust", "ad_revenue",
+    "cpi_adjust", "arpu_d0", "roas_ad_d0", "roas_ad_d7", "roas_ad_d30",
+    "retention_rate_d1", "retention_rate_d7",
+]
+
 
 def extract_campaign_id(campaign_name: str) -> str | None:
     """Trích số campaign_id từ tên campaign Adjust (số trong ngoặc, cuối chuỗi).
@@ -44,11 +54,18 @@ def prepare_adjust_for_merge(adjust_df: pd.DataFrame, product_id: str) -> pd.Dat
     """Lọc Adjust về đúng app/product đang xem, trích campaign_id, rồi gộp về
     đúng grain day+country+campaign_id (đề phòng nhiều dòng campaign khác
     tên nhưng cùng campaign_id — VD bản "Dup1" của cùng 1 campaign)."""
+    if adjust_df is None or adjust_df.empty:
+        return pd.DataFrame(columns=ADJUST_MERGE_COLS)
+
     df = adjust_df[adjust_df["app"].astype(str).str.startswith(product_id, na=False)].copy()
     df["campaign_id"] = df["campaign"].apply(extract_campaign_id)
     df = df[df["campaign_id"].notna()].copy()
     if df.empty:
-        return df
+        # Token đúng nhưng KHÔNG có campaign nào khớp app này/trích được
+        # campaign_id (VD sai App Token, hoặc app chưa từng chạy Facebook Ads)
+        # — vẫn phải trả về ĐÚNG bộ cột (rỗng) để merge_meta_adjust() không
+        # bị thiếu cột.
+        return pd.DataFrame(columns=ADJUST_MERGE_COLS)
 
     for col in ("installs", "network_cost", "ad_revenue"):
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
@@ -94,16 +111,15 @@ def merge_meta_adjust(bq_df: pd.DataFrame, adjust_prepared: pd.DataFrame) -> pd.
     left["day"] = left["day"].astype(str)
     left["campaign_id"] = left["campaign_id"].astype(str)
 
+    # adjust_prepared LUÔN có đủ cột ADJUST_MERGE_COLS (kể cả khi 0 dòng — xem
+    # prepare_adjust_for_merge()) — merge với df rỗng nhưng đúng cột vẫn ra kết
+    # quả đúng (mọi dòng "Chỉ có ở BigQuery"), KHÔNG cần nhánh riêng cho rỗng.
     right = adjust_prepared.copy()
-    if right.empty:
-        merged = left.copy()
-        merged["_merge"] = "left_only"
-    else:
-        right["day"] = right["day"].astype(str)
-        right["campaign_id"] = right["campaign_id"].astype(str)
-        merged = left.merge(
-            right, on=["day", "country", "campaign_id"], how="outer", indicator=True, suffixes=("", "_adj")
-        )
+    right["day"] = right["day"].astype(str)
+    right["campaign_id"] = right["campaign_id"].astype(str)
+    merged = left.merge(
+        right, on=["day", "country", "campaign_id"], how="outer", indicator=True, suffixes=("", "_adj")
+    )
 
     status_map = {"left_only": "Chỉ có ở BigQuery (Meta)", "right_only": "Chỉ có ở Adjust", "both": "Khớp cả 2 nguồn"}
     merged["Trạng thái ghép"] = merged["_merge"].map(status_map).fillna(status_map["left_only"])

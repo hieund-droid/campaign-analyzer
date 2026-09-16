@@ -54,6 +54,7 @@ import country_meta as cmeta
 import meta_adjust_merge as mam
 import campaign_alerts as calerts
 import campaign_doctor as cdoc
+import campaign_snapshots as csnap
 from streamlit_local_storage import LocalStorage
 
 load_dotenv()  # đọc .env khi chạy local — dùng cho GOOGLE_APPLICATION_CREDENTIALS
@@ -425,6 +426,71 @@ def page_adjust():
             row3 = st.columns(4)
             row3[0].metric("Retention D1", fmt_percent(kpis.get("retention_rate_d1")))
             row3[1].metric("Retention D7", fmt_percent(kpis.get("retention_rate_d7")))
+
+            if st.session_state.adjust_include_today:
+                st.divider()
+                st.subheader("Theo dõi trong ngày (sáng vs hiện tại)")
+                st.caption(
+                    "Tự động lưu lại CPI/ROAS D0/ARPU D0 mỗi lần bạn xem \"Hôm nay\" (cách "
+                    f"nhau tối thiểu {csnap.MIN_INTERVAL_HOURS} tiếng) — để so sánh sau này "
+                    "không cần nhớ số buổi sáng. ⚠️ Có thể mất nếu app ngủ/redeploy giữa các lần xem."
+                )
+
+                snapshot_rows = 0
+                for app_name, g_app in filtered.groupby("app"):
+                    campaign_stats = {}
+                    for campaign_name, g in g_app.groupby("campaign"):
+                        k = weighted_kpis(g)
+                        campaign_stats[campaign_name] = {
+                            "installs": k["installs"],
+                            "cpi": k["cpi"],
+                            "roas_d0": k.get("roas_ad_d0"),
+                            "arpu_d0": k.get("arpu_d0"),
+                        }
+                    snapshot_rows += csnap.maybe_capture_snapshots(app_name, campaign_stats)
+                if snapshot_rows:
+                    st.caption(f"📸 Vừa chụp thêm {snapshot_rows} campaign mới.")
+
+                compare_rows = []
+                for app_name, g_app in filtered.groupby("app"):
+                    for campaign_name in g_app["campaign"].unique():
+                        cmp = csnap.compare_today(app_name, campaign_name)
+                        if cmp:
+                            compare_rows.append({
+                                "Campaign": campaign_name,
+                                "Lần đầu hôm nay": cmp["first_ts"][11:16],
+                                "Lần gần nhất": cmp["last_ts"][11:16],
+                                "CPI đầu": cmp["first"].get("cpi"),
+                                "CPI hiện tại": cmp["last"].get("cpi"),
+                                "CPI % đổi": cmp["cpi_pct_change"],
+                                "ROAS D0 đầu": cmp["first"].get("roas_d0"),
+                                "ROAS D0 hiện tại": cmp["last"].get("roas_d0"),
+                                "ROAS D0 % đổi": cmp["roas_d0_pct_change"],
+                                "ARPU D0 đầu": cmp["first"].get("arpu_d0"),
+                                "ARPU D0 hiện tại": cmp["last"].get("arpu_d0"),
+                            })
+
+                if not compare_rows:
+                    st.info(
+                        "Chưa đủ 2 lần chụp trong hôm nay để so sánh — quay lại xem sau "
+                        f"(cách lần trước ≥{csnap.MIN_INTERVAL_HOURS} tiếng) để thấy bảng so sánh."
+                    )
+                else:
+                    compare_df = pd.DataFrame(compare_rows).sort_values("ROAS D0 % đổi").reset_index(drop=True)
+                    st.dataframe(
+                        compare_df, width="stretch", hide_index=True,
+                        column_config={
+                            "CPI đầu": st.column_config.NumberColumn(format="$%.4f"),
+                            "CPI hiện tại": st.column_config.NumberColumn(format="$%.4f"),
+                            "CPI % đổi": st.column_config.NumberColumn(format="%.1f%%"),
+                            "ROAS D0 đầu": st.column_config.NumberColumn(format="percent"),
+                            "ROAS D0 hiện tại": st.column_config.NumberColumn(format="percent"),
+                            "ROAS D0 % đổi": st.column_config.NumberColumn(format="%.1f%%"),
+                            "ARPU D0 đầu": st.column_config.NumberColumn(format="$%.4f"),
+                            "ARPU D0 hiện tại": st.column_config.NumberColumn(format="$%.4f"),
+                        },
+                    )
+                    st.caption("ROAS D0 tụt nhiều nhất (so với lần chụp đầu hôm nay) lên đầu.")
 
             st.subheader("Xu hướng theo ngày")
             trend = (

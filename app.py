@@ -506,7 +506,19 @@ def page_adjust():
                 st.info("Chỉ có 1 ngày dữ liệu — chọn thêm ngày để xem xu hướng dạng biểu đồ.")
                 st.dataframe(trend, width="stretch")
             else:
-                st.line_chart(trend)
+                # Tách 2 biểu đồ RIÊNG — installs (hàng nghìn) và chi phí/doanh thu
+                # (thường vài chục/trăm đô) chênh lệch quá xa về đơn vị/độ lớn, để
+                # chung 1 biểu đồ sẽ làm 2 đường chi phí/doanh thu bẹp dí sát 0,
+                # không đọc được (user phản ánh thật khi xem trên Cloud).
+                tcol1, tcol2 = st.columns(2)
+                with tcol1:
+                    st.caption("Installs")
+                    st.line_chart(trend[["installs"]])
+                with tcol2:
+                    st.caption("Chi phí vs Ad Revenue ($)")
+                    st.line_chart(trend[["network_cost", "ad_revenue"]].rename(
+                        columns={"network_cost": "Chi phí", "ad_revenue": "Ad Revenue"}
+                    ))
 
             st.subheader("Dữ liệu chi tiết theo campaign")
             st.caption(

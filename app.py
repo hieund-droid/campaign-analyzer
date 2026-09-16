@@ -6,14 +6,16 @@ Streamlit (không phải do code này), phần code cải thiện là icon + nh�
 
 4 trang, nhóm theo 2 danh mục:
 - Mục lẻ (không thuộc danh mục nào):
-  - "Dashboard": Adjust — installs, CPI, ad revenue, ROAS D0/D7/D30, retention
-    D1/D7, ARPU. MỖI NGƯỜI TỰ NHẬP API Token + App Token của mình (mỗi người
-    dùng account Adjust riêng) — không dùng chung Secrets, chỉ lưu tạm trong
-    session của họ.
+  - "Adjust" (đổi tên từ "Dashboard" 16/09/2026 — user chỉ ra tên cũ quá
+    chung chung, không nói rõ đây là nguồn Adjust, trong khi các trang khác
+    đều đặt tên theo nguồn/chức năng): installs, CPI, ad revenue, ROAS
+    D0/D7/D30, retention D1/D7, ARPU. MỖI NGƯỜI TỰ NHẬP API Token + App Token
+    của mình (mỗi người dùng account Adjust riêng) — không dùng chung
+    Secrets, chỉ lưu tạm trong session của họ.
   - "Meta + Adjust": ghép dữ liệu Meta (BigQuery, channel="Facebook") với
     Adjust theo campaign + ngày + quốc gia — xem `meta_adjust_merge.py` để
     biết cách ghép (đã kiểm chứng khớp 100% campaign_id bằng số thật). Vẫn
-    cần token Adjust cá nhân (dùng chung ô nhớ với trang Dashboard). Có thêm
+    cần token Adjust cá nhân (dùng chung ô nhớ với trang Adjust). Có thêm
     PL2 (lãi marketing = ad_revenue − spend, đã chốt công thức với user).
   - "Cảnh báo": phát hiện CPI tăng đột biến / ROAS D0 tụt đột biến / xu hướng
     giảm dần kéo dài, theo TỪNG CAMPAIGN — chỉ dùng Adjust (không cần ghép
@@ -377,9 +379,80 @@ def page_adjust():
             else:
                 st.line_chart(trend)
 
-            st.subheader("Dữ liệu chi tiết")
-            st.caption("ℹ️ Các cột % ở đây là theo từng dòng, không cộng dồn được (KPI trên đã tính đúng).")
-            st.dataframe(filtered, width="stretch", hide_index=True)
+            st.subheader("Dữ liệu chi tiết theo campaign")
+            st.caption(
+                "Mỗi campaign 1 dòng (đã gộp mọi quốc gia, tính đúng cách — không "
+                "trung bình cộng trực tiếp cột %). Muốn xem theo quốc gia, chọn 1 "
+                "campaign ở dropdown bên dưới bảng."
+            )
+
+            campaign_rows = []
+            for campaign_name, g in filtered.groupby("campaign"):
+                k = weighted_kpis(g)
+                campaign_rows.append({
+                    "Campaign": campaign_name,
+                    "Installs": k["installs"],
+                    "Chi phí": k["cost"],
+                    "Ad Revenue": k["ad_revenue"],
+                    "CPI": k["cpi"],
+                    "ARPU D0": k.get("arpu_d0"),
+                    "ROAS D0": k.get("roas_ad_d0"),
+                    "ROAS D7": k.get("roas_ad_d7"),
+                    "ROAS D30": k.get("roas_ad_d30"),
+                    "Retention D1": k.get("retention_rate_d1"),
+                    "Retention D7": k.get("retention_rate_d7"),
+                })
+            campaign_summary = pd.DataFrame(campaign_rows).sort_values("Chi phí", ascending=False).reset_index(drop=True)
+
+            st.dataframe(
+                campaign_summary, width="stretch", hide_index=True,
+                column_config={
+                    "Chi phí": st.column_config.NumberColumn(format="$%.2f"),
+                    "Ad Revenue": st.column_config.NumberColumn(format="$%.2f"),
+                    "CPI": st.column_config.NumberColumn(format="$%.4f"),
+                    "ARPU D0": st.column_config.NumberColumn(format="$%.4f"),
+                    "ROAS D0": st.column_config.NumberColumn(format="percent"),
+                    "ROAS D7": st.column_config.NumberColumn(format="percent"),
+                    "ROAS D30": st.column_config.NumberColumn(format="percent"),
+                    "Retention D1": st.column_config.NumberColumn(format="percent"),
+                    "Retention D7": st.column_config.NumberColumn(format="percent"),
+                },
+            )
+
+            drilldown_campaign = st.selectbox(
+                "Xem chi tiết theo quốc gia cho campaign nào?",
+                ["(không chọn)"] + campaign_summary["Campaign"].tolist(),
+                key="adjust_drilldown_campaign",
+            )
+            if drilldown_campaign != "(không chọn)":
+                by_country_rows = []
+                campaign_df = filtered[filtered["campaign"] == drilldown_campaign]
+                for country_name, g in campaign_df.groupby("country"):
+                    k = weighted_kpis(g)
+                    by_country_rows.append({
+                        "Quốc gia": country_name,
+                        "Installs": k["installs"],
+                        "Chi phí": k["cost"],
+                        "Ad Revenue": k["ad_revenue"],
+                        "CPI": k["cpi"],
+                        "ARPU D0": k.get("arpu_d0"),
+                        "ROAS D0": k.get("roas_ad_d0"),
+                        "Retention D1": k.get("retention_rate_d1"),
+                    })
+                by_country_df = (
+                    pd.DataFrame(by_country_rows).sort_values("Chi phí", ascending=False).reset_index(drop=True)
+                )
+                st.dataframe(
+                    by_country_df, width="stretch", hide_index=True,
+                    column_config={
+                        "Chi phí": st.column_config.NumberColumn(format="$%.2f"),
+                        "Ad Revenue": st.column_config.NumberColumn(format="$%.2f"),
+                        "CPI": st.column_config.NumberColumn(format="$%.4f"),
+                        "ARPU D0": st.column_config.NumberColumn(format="$%.4f"),
+                        "ROAS D0": st.column_config.NumberColumn(format="percent"),
+                        "Retention D1": st.column_config.NumberColumn(format="percent"),
+                    },
+                )
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -697,7 +770,7 @@ def page_meta_adjust():
         ma_days_back = MA_DATE_PRESETS[ma_date_choice]
 
     st.caption(
-        "🔒 Cần token Adjust cá nhân (giống trang Dashboard — nếu đã nhập ở đó, "
+        "🔒 Cần token Adjust cá nhân (giống trang Adjust — nếu đã nhập ở đó, "
         "ô dưới đây tự điền sẵn vì dùng chung 1 ô nhớ trong phiên của bạn)."
     )
     acol1, acol2, acol3 = st.columns([2, 2, 1])
@@ -903,7 +976,7 @@ def page_alerts():
         )
         al_days_back = AL_DATE_PRESETS[al_date_choice]
 
-    st.caption("🔒 Cần token Adjust cá nhân (dùng chung ô nhớ với trang Dashboard/Meta + Adjust).")
+    st.caption("🔒 Cần token Adjust cá nhân (dùng chung ô nhớ với trang Adjust/Meta + Adjust).")
     acol1, acol2, acol3 = st.columns([2, 2, 1])
     with acol1:
         al_api_token = st.text_input("API Token cá nhân (Adjust)", type="password", key="adjust_api_token")
@@ -1270,7 +1343,7 @@ pg = st.navigation(
         # Icon dùng Material Symbols (nét viền tối giản) — theo đúng phong cách
         # ảnh mẫu user gửi.
         "": [
-            st.Page(page_adjust, title="Dashboard", icon=":material/monitoring:", default=True),
+            st.Page(page_adjust, title="Adjust", icon=":material/monitoring:", default=True),
             st.Page(page_meta_adjust, title="Meta + Adjust", icon=":material/join_inner:"),
             st.Page(page_alerts, title="Cảnh báo", icon=":material/warning:"),
             st.Page(page_campaign_doctor, title="Chẩn đoán", icon=":material/stethoscope:"),

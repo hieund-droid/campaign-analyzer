@@ -32,6 +32,13 @@ def _now_vn() -> datetime:
     return datetime.now(VN_TZ)
 
 
+def today_str_vn() -> str:
+    """Ngày hôm nay dạng YYYY-MM-DD theo giờ VN — dùng để tách dòng "hôm nay"
+    (chưa chốt) ra khỏi dòng ngày đã chốt trong dữ liệu Adjust (cả 2 đều đã
+    gọi API với utc_offset=+07:00 nên cột "day" luôn theo lịch VN)."""
+    return _now_vn().strftime("%Y-%m-%d")
+
+
 def load_snapshots() -> dict:
     """{app_key: {campaign: [{"ts": iso-string, "installs":, "cpi":, "roas_d0":, "arpu_d0":}, ...]}}"""
     if os.path.exists(SNAPSHOT_FILE):
@@ -46,6 +53,13 @@ def load_snapshots() -> dict:
 def _save_all(data: dict) -> None:
     with open(SNAPSHOT_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def load_snapshot_app_keys() -> list:
+    """Liệt kê mọi app_key (field "app" thật của Adjust) đã từng có snapshot —
+    dùng làm fallback khi không có sẵn danh sách app trong df hiện tại (VD
+    lịch sử nhiều ngày rỗng nhưng đã từng chụp snapshot hôm nay từ trước)."""
+    return list(load_snapshots().keys())
 
 
 def get_campaign_snapshots(app_key: str, campaign: str) -> list:
@@ -138,3 +152,25 @@ def compare_today(app_key: str, campaign: str) -> dict | None:
         "arpu_d0_pct_change": _pct(first.get("arpu_d0"), last.get("arpu_d0")),
         "n_snapshots": len(today_snaps),
     }
+
+
+def list_flagged_today(app_key: str, threshold_pct: float = 20.0) -> list:
+    """CẢNH BÁO TRONG NGÀY (thời gian thực) — khác hẳn phân tích ngày/tuần đã
+    chốt: so snapshot ĐẦU TIÊN hôm nay (thường = sáng) với MỚI NHẤT (thường =
+    bây giờ) cho MỌI campaign đã từng được chụp hôm nay, gắn cờ nếu CPI TĂNG
+    hoặc ROAS D0/ARPU D0 GIẢM vượt threshold_pct% — để UA phát hiện + xử lý
+    ngay trong ngày (VD sáng CPI rẻ, chiều tăng vọt), không phải đợi qua ngày
+    hôm sau mới thấy ở "Cảnh báo theo xu hướng"."""
+    data = load_snapshots()
+    campaigns = data.get(app_key, {})
+    flagged = []
+    for campaign in campaigns:
+        cmp = compare_today(app_key, campaign)
+        if not cmp:
+            continue
+        cpi_bad = cmp["cpi_pct_change"] is not None and cmp["cpi_pct_change"] >= threshold_pct
+        roas_bad = cmp["roas_d0_pct_change"] is not None and cmp["roas_d0_pct_change"] <= -threshold_pct
+        arpu_bad = cmp["arpu_d0_pct_change"] is not None and cmp["arpu_d0_pct_change"] <= -threshold_pct
+        if cpi_bad or roas_bad or arpu_bad:
+            flagged.append({"campaign": campaign, "cpi_bad": cpi_bad, "roas_bad": roas_bad, "arpu_bad": arpu_bad, **cmp})
+    return sorted(flagged, key=lambda f: f.get("roas_d0_pct_change") or 0)

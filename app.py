@@ -328,6 +328,24 @@ def get_bq_client():
     return None, "Thiếu cấu hình BigQuery (Secrets [gcp_service_account] hoặc GOOGLE_APPLICATION_CREDENTIALS)."
 
 
+@st.cache_data(ttl=60 * 60, show_spinner=False)
+def get_known_product_ids():
+    """Danh sách app THẬT lấy trực tiếp từ BigQuery (bq.refresh_product_ids())
+    — KHÔNG dùng list gõ cứng bq.KNOWN_PRODUCT_IDS nữa (đã gặp đúng vấn đề
+    user chỉ ra 18/09/2026: list cứng không tự cập nhật khi team Data thêm app
+    mới). Cache 1 tiếng — đủ mới, không query lại mỗi lần rerun trang (tốn
+    quota dù rất nhỏ). Rớt về list cứng nếu query lỗi (VD thiếu credentials),
+    để app còn dùng được thay vì crash."""
+    client, cerr = get_bq_client()
+    if cerr:
+        return bq.KNOWN_PRODUCT_IDS, cerr
+    try:
+        ids = bq.refresh_product_ids(client)
+        return (ids or bq.KNOWN_PRODUCT_IDS), None
+    except Exception as e:  # noqa: BLE001
+        return bq.KNOWN_PRODUCT_IDS, f"Không lấy được danh sách app mới nhất từ BigQuery: {e}"
+
+
 # ══════════════════════════════════════════════════════════════════════
 # TRANG — Adjust
 # ══════════════════════════════════════════════════════════════════════
@@ -607,9 +625,13 @@ def page_report_builder():
     st.title("Report Builder")
     st.caption("🔑 Key dùng chung team. Chỉ có Impressions + eCPM theo Quốc gia/Ad unit/Định dạng.")
 
+    known_product_ids, product_ids_err = get_known_product_ids()
+    if product_ids_err:
+        st.caption(f"⚠️ {product_ids_err} — đang dùng danh sách app cũ đã lưu sẵn.")
+
     fcol1, fcol2, fcol3 = st.columns([2, 2, 1])
     with fcol1:
-        flex_product_id = st.selectbox("App (product_id)", bq.KNOWN_PRODUCT_IDS, key="bq_flex_product")
+        flex_product_id = st.selectbox("App (product_id)", known_product_ids, key="bq_flex_product")
     with fcol2:
         FLEX_DATE_PRESETS = {"Hôm qua": 1, "7 ngày qua": 7, "14 ngày qua": 14, "30 ngày qua": 30}
         flex_date_choice = st.selectbox(
@@ -674,9 +696,13 @@ def page_market_board():
     st.caption("eCPM từng quốc gia so với benchmark riêng của nước đó · 🟢 đạt · 🔴 dưới benchmark.")
     st.warning("⚠️ Benchmark có thể mất khi app khởi động lại — chưa lưu bền vững.")
 
+    known_product_ids, product_ids_err = get_known_product_ids()
+    if product_ids_err:
+        st.caption(f"⚠️ {product_ids_err} — đang dùng danh sách app cũ đã lưu sẵn.")
+
     mcol1, mcol2, mcol3 = st.columns(3)
     with mcol1:
-        mkt_product_id = st.selectbox("App (product_id)", bq.KNOWN_PRODUCT_IDS, key="mkt_product")
+        mkt_product_id = st.selectbox("App (product_id)", known_product_ids, key="mkt_product")
     with mcol2:
         # Mặc định 30 ngày — đúng khoảng dùng để tính "top theo doanh thu" mặc
         # định (xem bên dưới), nếu đổi sang 14/60 ngày thì top-N cũng tính lại
@@ -906,9 +932,13 @@ def page_meta_adjust():
         "kết quả cuối (CPI/ARPU/ROAS/Retention) · Ghép theo campaign + ngày + quốc gia."
     )
 
+    known_product_ids, product_ids_err = get_known_product_ids()
+    if product_ids_err:
+        st.caption(f"⚠️ {product_ids_err} — đang dùng danh sách app cũ đã lưu sẵn.")
+
     fcol1, fcol2 = st.columns(2)
     with fcol1:
-        ma_product_id = st.selectbox("App (product_id)", bq.KNOWN_PRODUCT_IDS, key="ma_product")
+        ma_product_id = st.selectbox("App (product_id)", known_product_ids, key="ma_product")
     with fcol2:
         MA_DATE_PRESETS = {"7 ngày qua": 7, "14 ngày qua": 14, "30 ngày qua": 30}
         ma_date_choice = st.selectbox("Khoảng ngày", list(MA_DATE_PRESETS.keys()), index=1, key="ma_date")
@@ -1112,9 +1142,13 @@ def page_alerts():
         "dùng riêng dữ liệu Adjust, áp dụng cho MỌI channel (không chỉ Meta)."
     )
 
+    known_product_ids, product_ids_err = get_known_product_ids()
+    if product_ids_err:
+        st.caption(f"⚠️ {product_ids_err} — đang dùng danh sách app cũ đã lưu sẵn.")
+
     col1, col2 = st.columns(2)
     with col1:
-        al_product_id = st.selectbox("App (product_id)", bq.KNOWN_PRODUCT_IDS, key="al_product")
+        al_product_id = st.selectbox("App (product_id)", known_product_ids, key="al_product")
     with col2:
         AL_DATE_PRESETS = {"30 ngày qua": 30, "60 ngày qua": 60}
         al_date_choice = st.selectbox(

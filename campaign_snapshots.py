@@ -154,7 +154,7 @@ def compare_today(app_key: str, campaign: str) -> dict | None:
     }
 
 
-def list_flagged_today(app_key: str, threshold_pct: float = 20.0) -> list:
+def list_flagged_today(app_key: str, threshold_pct: float = 20.0, min_installs: int = 0) -> list:
     """CẢNH BÁO TRONG NGÀY (thời gian thực) — khác hẳn phân tích ngày/tuần đã
     chốt: so snapshot ĐẦU TIÊN hôm nay (thường = sáng) với MỚI NHẤT (thường =
     bây giờ) cho MỌI campaign đã từng được chụp hôm nay, gắn cờ nếu CPI TĂNG
@@ -167,6 +167,8 @@ def list_flagged_today(app_key: str, threshold_pct: float = 20.0) -> list:
     for campaign in campaigns:
         cmp = compare_today(app_key, campaign)
         if not cmp:
+            continue
+        if min_installs and (cmp["last"].get("installs") or 0) < min_installs:
             continue
         cpi_bad = cmp["cpi_pct_change"] is not None and cmp["cpi_pct_change"] >= threshold_pct
         roas_bad = cmp["roas_d0_pct_change"] is not None and cmp["roas_d0_pct_change"] <= -threshold_pct

@@ -1162,38 +1162,13 @@ def page_alerts():
     st.caption("🔒 Cần token Adjust cá nhân — nhập ở sidebar bên trái.")
     al_fetch_clicked = st.button("Apply", type="primary", key="al_fetch")
 
-    st.markdown("**Ngưỡng cảnh báo** (chỉnh ngay không cần bấm Apply lại — không tốn thêm API)")
-    tcol1, tcol2, tcol3, tcol4 = st.columns(4)
-    with tcol1:
-        al_min_installs = st.number_input(
-            "Install tối thiểu để xét",
-            min_value=0, value=30, step=10, key="al_min_installs",
-            help="Campaign có ít install hơn mức này sẽ bị bỏ qua — quá ít dữ "
-            "liệu dễ báo động giả (VD 1-2 install cũng đủ làm số nhảy vọt vô nghĩa).",
-        )
-    with tcol2:
-        al_spike_pct = st.number_input(
-            "Mức lệch trong 1 NGÀY coi là bất thường (%)",
-            min_value=5, value=30, step=5, key="al_spike_pct",
-            help="So ngày gần nhất với mức bình thường của 7 ngày trước — lệch "
-            "quá mức này (dù tăng hay giảm) sẽ bị gắn cờ \"đột biến\".",
-        )
-    with tcol3:
-        al_decline_pct = st.number_input(
-            "Mức giảm kéo dài NHIỀU NGÀY coi là đáng lo (%)",
-            min_value=5, value=20, step=5, key="al_decline_pct",
-            help="So trung bình 7 ngày gần đây với 7 ngày trước đó — CPI tăng "
-            "hoặc LTV/ROAS giảm quá mức này bị gắn cờ \"giảm dần\" (xu hướng "
-            "xấu kéo dài, không phải giật cục 1 ngày).",
-        )
-    with tcol4:
-        al_realtime_pct = st.number_input(
-            "Mức thay đổi TRONG HÔM NAY cần xử lý ngay (%)",
-            min_value=5, value=20, step=5, key="al_realtime_pct",
-            help="So với lần xem đầu tiên hôm nay (thường là buổi sáng) — VD "
-            "CPI tăng vọt hoặc LTV tụt so với sáng nay sẽ hiện ở mục \"Cảnh "
-            "báo trong ngày\" bên dưới.",
-        )
+    al_min_installs = st.number_input(
+        "Install tối thiểu để tính vào cảnh báo (áp dụng cho cả 2 mục bên dưới)",
+        min_value=0, value=30, step=10, key="al_min_installs",
+        help="Campaign có ít install hơn mức này sẽ bị bỏ qua ở CẢ 2 mục cảnh "
+        "báo bên dưới — quá ít dữ liệu dễ báo động giả (VD 1-2 install cũng đủ "
+        "làm số nhảy vọt vô nghĩa).",
+    )
 
     if "al_daily_df" not in st.session_state:
         st.session_state.al_daily_df = None
@@ -1269,10 +1244,6 @@ def page_alerts():
     # Adjust "app" field không nhất thiết có mặt trong historical_df nếu hôm nay
     # là ngày DUY NHẤT có data — lấy trực tiếp từ app_tokens đã lọc thay vì chỉ
     # dựa vào historical_df để không bỏ sót.
-    all_flagged_today = []
-    for app_name in (apps_in_scope or [a for a in csnap.load_snapshot_app_keys() if a.startswith(al_product_id)]):
-        all_flagged_today.extend(csnap.list_flagged_today(app_name, threshold_pct=float(al_realtime_pct)))
-
     st.subheader("⚡ Cảnh báo trong ngày (thời gian thực)")
     st.caption(
         "So lần chụp ĐẦU TIÊN hôm nay (thường = sáng) với lần MỚI NHẤT (thường = "
@@ -1281,6 +1252,19 @@ def page_alerts():
         "CPI (chi phí), LTV/ARPU D0 (giá trị user), ROAS D0 (= LTV ÷ CPI) — để "
         "biết ROAS biến động là do chi phí đắt lên hay do giá trị user tụt xuống."
     )
+    al_realtime_pct = st.number_input(
+        "Mức thay đổi cần báo động (%)",
+        min_value=5, value=20, step=5, key="al_realtime_pct",
+        help="So với lần xem đầu tiên hôm nay (thường là buổi sáng) — VD CPI "
+        "tăng vọt hoặc LTV tụt quá mức này so với sáng nay sẽ hiện ở bảng dưới đây.",
+    )
+
+    all_flagged_today = []
+    for app_name in (apps_in_scope or [a for a in csnap.load_snapshot_app_keys() if a.startswith(al_product_id)]):
+        all_flagged_today.extend(
+            csnap.list_flagged_today(app_name, threshold_pct=float(al_realtime_pct), min_installs=int(al_min_installs))
+        )
+
     if not all_flagged_today:
         st.info(
             "Chưa đủ 2 lần chụp trong hôm nay để so sánh, hoặc chưa campaign nào "
@@ -1318,10 +1302,27 @@ def page_alerts():
     st.divider()
     st.subheader("Cảnh báo theo xu hướng nhiều ngày (dữ liệu đã chốt)")
     st.caption(
-        "Khác với mục trên — đây so sánh giữa các NGÀY ĐÃ CHỐT (không gồm hôm "
-        "nay), dùng để phát hiện xu hướng kéo dài nhiều ngày, không phải biến "
-        "động trong 1 ngày."
+        "Khác với mục trên — đây so sánh giữa các NGÀY ĐÃ CHỐT (KHÔNG gồm hôm "
+        "nay, vì số hôm nay vẫn đang chạy chưa xong), dùng để phát hiện xu "
+        "hướng kéo dài nhiều ngày."
     )
+    ncol1, ncol2 = st.columns(2)
+    with ncol1:
+        al_spike_pct = st.number_input(
+            "Mức thay đổi ĐỘT NGỘT so với tuần trước (%)",
+            min_value=5, value=30, step=5, key="al_spike_pct",
+            help="So NGÀY ĐÃ CHỐT GẦN NHẤT (KHÔNG phải hôm nay) với mức bình "
+            "thường của 7 ngày trước đó — lệch quá mức này (dù tăng hay giảm) "
+            "sẽ bị gắn cờ \"đột biến\".",
+        )
+    with ncol2:
+        al_decline_pct = st.number_input(
+            "Mức xấu đi DẦN qua nhiều tuần (%)",
+            min_value=5, value=20, step=5, key="al_decline_pct",
+            help="So trung bình 7 ngày đã chốt gần đây với 7 ngày trước đó nữa "
+            "— CPI tăng hoặc LTV/ROAS giảm quá mức này bị gắn cờ \"giảm dần\" "
+            "(xu hướng xấu kéo dài nhiều ngày, không phải giật cục 1 lần).",
+        )
 
     if st.session_state.al_daily_df.empty:
         st.warning("Không có dữ liệu campaign nào cho app/khoảng ngày này.")

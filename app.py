@@ -1166,23 +1166,33 @@ def page_alerts():
     tcol1, tcol2, tcol3, tcol4 = st.columns(4)
     with tcol1:
         al_min_installs = st.number_input(
-            "Installs tối thiểu để xét (lọc campaign quá nhỏ)",
+            "Install tối thiểu để xét",
             min_value=0, value=30, step=10, key="al_min_installs",
+            help="Campaign có ít install hơn mức này sẽ bị bỏ qua — quá ít dữ "
+            "liệu dễ báo động giả (VD 1-2 install cũng đủ làm số nhảy vọt vô nghĩa).",
         )
     with tcol2:
         al_spike_pct = st.number_input(
-            "Ngưỡng \"đột biến\" (% lệch vs TB 7 ngày trước)",
+            "Mức lệch trong 1 NGÀY coi là bất thường (%)",
             min_value=5, value=30, step=5, key="al_spike_pct",
+            help="So ngày gần nhất với mức bình thường của 7 ngày trước — lệch "
+            "quá mức này (dù tăng hay giảm) sẽ bị gắn cờ \"đột biến\".",
         )
     with tcol3:
         al_decline_pct = st.number_input(
-            "Ngưỡng \"giảm dần\" (% đổi giữa 2 tuần liền kề)",
+            "Mức giảm kéo dài NHIỀU NGÀY coi là đáng lo (%)",
             min_value=5, value=20, step=5, key="al_decline_pct",
+            help="So trung bình 7 ngày gần đây với 7 ngày trước đó — CPI tăng "
+            "hoặc LTV/ROAS giảm quá mức này bị gắn cờ \"giảm dần\" (xu hướng "
+            "xấu kéo dài, không phải giật cục 1 ngày).",
         )
     with tcol4:
         al_realtime_pct = st.number_input(
-            "Ngưỡng cảnh báo TRONG NGÀY (% so với lần chụp đầu hôm nay)",
+            "Mức thay đổi TRONG HÔM NAY cần xử lý ngay (%)",
             min_value=5, value=20, step=5, key="al_realtime_pct",
+            help="So với lần xem đầu tiên hôm nay (thường là buổi sáng) — VD "
+            "CPI tăng vọt hoặc LTV tụt so với sáng nay sẽ hiện ở mục \"Cảnh "
+            "báo trong ngày\" bên dưới.",
         )
 
     if "al_daily_df" not in st.session_state:

@@ -1259,10 +1259,14 @@ def page_alerts():
         "tăng vọt hoặc LTV tụt quá mức này so với sáng nay sẽ hiện ở bảng dưới đây.",
     )
 
+    scope_apps = apps_in_scope or [a for a in csnap.load_snapshot_app_keys() if a.startswith(al_product_id)]
+
     all_flagged_today = []
-    for app_name in (apps_in_scope or [a for a in csnap.load_snapshot_app_keys() if a.startswith(al_product_id)]):
+    for app_name in scope_apps:
         all_flagged_today.extend(
-            csnap.list_flagged_today(app_name, threshold_pct=float(al_realtime_pct), min_installs=int(al_min_installs))
+            csnap.list_flagged_hours_ago(
+                app_name, threshold_pct=float(al_realtime_pct), min_installs=int(al_min_installs)
+            )
         )
 
     if not all_flagged_today:
@@ -1283,8 +1287,9 @@ def page_alerts():
                 flags.append("🔴 LTV (ARPU D0) giảm")
             realtime_rows.append({
                 "Campaign": f["campaign"],
-                "Lần đầu hôm nay": f["first_ts"][11:16],
-                "Lần gần nhất": f["last_ts"][11:16],
+                "So với ~mấy tiếng trước": f"{f['actual_hours_gap']:.1f}h",
+                "Lúc đó": f["baseline_ts"][11:16],
+                "Bây giờ": f["latest_ts"][11:16],
                 "CPI % đổi": f["cpi_pct_change"],
                 "LTV (ARPU D0) % đổi": f["arpu_d0_pct_change"],
                 "ROAS D0 % đổi": f["roas_d0_pct_change"],
@@ -1298,6 +1303,42 @@ def page_alerts():
                 "ROAS D0 % đổi": st.column_config.NumberColumn(format="%.1f%%"),
             },
         )
+        st.caption(
+            "Mỗi campaign hiện mốc so sánh cho thấy vấn đề RÕ NHẤT (trong số "
+            "1/2/3 tiếng trước, tự động chọn snapshot gần mốc đó nhất — không "
+            "chính xác tuyệt đối vì chỉ chụp được khi có người mở app)."
+        )
+
+    with st.expander("Xem thêm: so với lần đầu tiên xem hôm nay (VD sáng nay, nếu có ai mở từ sáng)"):
+        all_flagged_since_first = []
+        for app_name in scope_apps:
+            all_flagged_since_first.extend(
+                csnap.list_flagged_today(
+                    app_name, threshold_pct=float(al_realtime_pct), min_installs=int(al_min_installs)
+                )
+            )
+        if not all_flagged_since_first:
+            st.caption("Chưa có gì vượt ngưỡng so với lần đầu tiên xem hôm nay.")
+        else:
+            since_first_rows = [
+                {
+                    "Campaign": f["campaign"],
+                    "Lần đầu hôm nay": f["first_ts"][11:16],
+                    "Bây giờ": f["last_ts"][11:16],
+                    "CPI % đổi": f["cpi_pct_change"],
+                    "LTV (ARPU D0) % đổi": f["arpu_d0_pct_change"],
+                    "ROAS D0 % đổi": f["roas_d0_pct_change"],
+                }
+                for f in all_flagged_since_first
+            ]
+            st.dataframe(
+                pd.DataFrame(since_first_rows), width="stretch", hide_index=True,
+                column_config={
+                    "CPI % đổi": st.column_config.NumberColumn(format="%.1f%%"),
+                    "LTV (ARPU D0) % đổi": st.column_config.NumberColumn(format="%.1f%%"),
+                    "ROAS D0 % đổi": st.column_config.NumberColumn(format="%.1f%%"),
+                },
+            )
 
     st.divider()
     st.subheader("Cảnh báo theo xu hướng nhiều ngày (dữ liệu đã chốt)")

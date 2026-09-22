@@ -635,12 +635,24 @@ def page_alerts():
     with col1:
         al_product_id = st.selectbox("App (product_id)", known_product_ids, key="al_product")
     with col2:
-        AL_DATE_PRESETS = {"30 ngày qua": 30, "60 ngày qua": 60}
+        # Bỏ "60 ngày qua" (dễ timeout với app nhiều dữ liệu — xem GHI_CHU_TIEN_DO.md
+        # mục sửa lỗi timeout 22/09/2026) — thêm nhiều mốc ngắn hơn để chọn đúng
+        # mức cần, đỡ phải kéo dư ngày không cần thiết.
+        AL_DATE_PRESETS = {
+            "3 ngày qua": 3, "7 ngày qua": 7, "14 ngày qua": 14,
+            "21 ngày qua": 21, "28 ngày qua": 28, "30 ngày qua": 30,
+        }
         al_date_choice = st.selectbox(
             "Khoảng ngày kéo (cần đủ dài để có mốc so sánh)",
-            list(AL_DATE_PRESETS.keys()), key="al_date",
+            list(AL_DATE_PRESETS.keys()), index=2, key="al_date",
         )
         al_days_back = AL_DATE_PRESETS[al_date_choice]
+    if al_days_back < 14:
+        st.caption(
+            "⚠️ Mục \"Cảnh báo theo xu hướng nhiều ngày\" cần tối thiểu 8 ngày để "
+            "phát hiện đột biến, 14 ngày để phát hiện giảm dần — chọn ít hơn sẽ "
+            "thiếu hoặc trống 1 phần bảng đó. Mục \"Trong ngày\" không bị ảnh hưởng."
+        )
     fcol_apply, fcol_force = st.columns([1, 3])
     with fcol_apply:
         al_fetch_clicked = st.button("Apply", type="primary", key="al_fetch")

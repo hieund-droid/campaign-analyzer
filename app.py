@@ -416,12 +416,29 @@ def get_known_product_ids(app_tokens_raw: str, api_token: str):
 # nhập + đọc số, vẫn LÀ 1 kho benchmark DUY NHẤT dùng chung cho Tầng 1 và tab
 # "Theo quốc gia" ở trang Xét nghiệm (không đổi gì ở benchmarks.py).
 # ══════════════════════════════════════════════════════════════════════
+@st.cache_data(ttl=15 * 60, show_spinner="Đang lấy danh sách quốc gia...")
+def load_known_countries(app_tokens_raw: str, api_token: str, product_id: str):
+    """Danh sách quốc gia THẬT đã có install cho app này (30 ngày qua) — dùng
+    cho trang Benchmark, tránh gõ tay sai chính tả/không khớp dữ liệu thật."""
+    if not api_token or not app_tokens_raw:
+        return [], "Thiếu API Token / App Token."
+    app_tokens = ac.parse_app_tokens(app_tokens_raw)
+    try:
+        countries = ac.list_known_countries(api_token, app_tokens, product_id, days_back=30, exit_on_error=False)
+        return countries, None
+    except Exception as e:  # noqa: BLE001
+        return [], f"Lỗi lấy danh sách quốc gia từ Adjust: {e}"
+
+
 def page_benchmark():
     st.title("Benchmark")
     st.caption(
         "Nhập benchmark \"bình thường\" CPI/LTV (ARPU D0)/ROAS D0/Retention D1 "
-        "cho từng app — dùng CHUNG cho cả Tầng 1 và tab \"Theo quốc gia\" ở "
-        "trang Xét nghiệm. Chỉ cần nhập 1 lần, lần sau tự điền sẵn."
+        "cho TỪNG QUỐC GIA của từng app (đổi 23/09/2026 — campaign chạy GLOBAL "
+        "thì CPI/LTV \"bình thường\" của mỗi nước khác nhau rất nhiều, benchmark "
+        "chung cho cả app không có ý nghĩa). Dùng cho bảng \"Theo quốc gia\" ở "
+        "trang Xét nghiệm — chỉ cần nhập 1 lần cho mỗi quốc gia, lần sau tự "
+        "điền sẵn."
     )
     api_token = st.session_state.get("adjust_api_token", "")
     app_tokens_raw = st.session_state.get("adjust_app_tokens", "")
@@ -435,55 +452,72 @@ def page_benchmark():
         st.warning("Không tìm thấy app nào cho token này trong 7 ngày qua — kiểm tra lại App Token ở sidebar.")
         return
 
-    bench_app = st.selectbox("App", product_ids, key="page_bench_app")
-    saved_bench = bm.get_doctor_benchmarks(bench_app)
+    bcol_app, bcol_country = st.columns(2)
+    with bcol_app:
+        bench_app = st.selectbox("App", product_ids, key="page_bench_app")
+    with bcol_country:
+        countries, countries_err = load_known_countries(app_tokens_raw, api_token, bench_app)
+        if countries_err:
+            st.error(f"❌ {countries_err}")
+            return
+        if not countries:
+            st.warning(f"Không tìm thấy quốc gia nào cho app {bench_app} trong 30 ngày qua.")
+            return
+        bench_country = st.selectbox("Quốc gia", countries, key=f"page_bench_country_{bench_app}")
+
+    already_set = bm.list_benchmarked_countries(bench_app)
+    if already_set:
+        st.caption(f"Đã có benchmark cho {len(already_set)}/{len(countries)} quốc gia của app này: {', '.join(already_set)}.")
+
+    saved_bench = bm.get_doctor_benchmarks(bench_app, bench_country)
     st.caption(
         "Tách riêng LTV (ARPU D0) khỏi ROAS D0 — ROAS D0 = LTV ÷ CPI, 1 mình "
         "ROAS không biết được xấu vì CPI đắt hay vì LTV tụt."
     )
-    # key CÓ tên app (đổi theo bench_app) — để widget TỰ RESET giá trị đúng
-    # app khi đổi app ở selectbox trên, không bị dính giá trị của app trước.
+    # key CÓ tên app + quốc gia — để widget TỰ RESET giá trị đúng khi đổi app
+    # hoặc đổi quốc gia ở 2 selectbox trên, không bị dính giá trị cũ.
+    _bk = f"{bench_app}_{bench_country}"
     bcol1, bcol2, bcol3, bcol4, bcol5 = st.columns(5)
     with bcol1:
         b_cpi = st.number_input(
             "CPI bình thường ($)", min_value=0.0,
             value=float(saved_bench.get("cpi") or 0.0), step=0.001, format="%.4f",
-            key=f"page_bench_cpi_{bench_app}",
+            key=f"page_bench_cpi_{_bk}",
         )
     with bcol2:
         b_arpu = st.number_input(
             "LTV (ARPU D0) bình thường ($)", min_value=0.0,
             value=float(saved_bench.get("arpu_d0") or 0.0), step=0.001, format="%.4f",
-            key=f"page_bench_arpu_{bench_app}",
+            key=f"page_bench_arpu_{_bk}",
         )
     with bcol3:
         b_roas = st.number_input(
             "ROAS D0 bình thường (%, VD 15 = 15%)", min_value=0.0,
             value=float((saved_bench.get("roas_d0") or 0.0) * 100), step=1.0,
-            key=f"page_bench_roas_{bench_app}",
+            key=f"page_bench_roas_{_bk}",
         )
     with bcol4:
         b_retention = st.number_input(
             "Retention D1 bình thường (%, VD 25 = 25%)", min_value=0.0,
             value=float((saved_bench.get("retention_d1") or 0.0) * 100), step=1.0,
-            key=f"page_bench_retention_{bench_app}",
+            key=f"page_bench_retention_{_bk}",
         )
     with bcol5:
         b_threshold = st.number_input(
             "Ngưỡng lệch coi là có vấn đề (%)", min_value=5.0,
             value=float(saved_bench.get("threshold_pct") or 20.0), step=5.0,
-            key=f"page_bench_threshold_{bench_app}",
+            key=f"page_bench_threshold_{_bk}",
         )
 
-    if st.button("💾 Lưu benchmark", type="primary", key=f"page_bench_save_{bench_app}"):
+    if st.button("💾 Lưu benchmark", type="primary", key=f"page_bench_save_{_bk}"):
         bm.save_doctor_benchmarks(
-            bench_app,
+            bench_app, bench_country,
             {
                 "cpi": b_cpi, "arpu_d0": b_arpu, "roas_d0": b_roas / 100,
                 "retention_d1": b_retention / 100, "threshold_pct": b_threshold,
             },
         )
-        st.success(f"Đã lưu benchmark cho {bench_app}.")
+        st.success(f"Đã lưu benchmark cho {bench_app} — {bench_country}.")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1096,30 +1130,19 @@ def page_campaign_doctor():
         key="doc_selected_campaign",
     )
 
-    # Benchmark giờ là 1 TRANG RIÊNG (23/09/2026 — trước đó thử ở sidebar,
-    # user phản hồi bất tiện) — trang này chỉ ĐỌC, không còn form nhập inline
-    # nữa. Muốn sửa, vào trang "Benchmark".
-    saved_bench = bm.get_doctor_benchmarks(product_id)
-    doc_threshold = saved_bench.get("threshold_pct") or 20.0
-    benchmark = {
-        "cpi": saved_bench.get("cpi"),
-        "arpu_d0": saved_bench.get("arpu_d0"),
-        "roas_d0": saved_bench.get("roas_d0"),
-        "retention_d1": saved_bench.get("retention_d1"),
-    }
-    if not any(benchmark.values()):
-        st.info(
-            f"👈 Chưa có benchmark cho app **{product_id}** — vào trang "
-            "**Benchmark** (sidebar bên trái) để nhập (dùng chung cho cả "
-            "Tầng 1 và bảng \"Theo quốc gia\" bên dưới)."
-        )
-    else:
-        bcol1, bcol2, bcol3, bcol4, bcol5 = st.columns(5)
-        bcol1.metric("CPI benchmark", fmt_money(benchmark["cpi"]))
-        bcol2.metric("LTV benchmark", fmt_money(benchmark["arpu_d0"]))
-        bcol3.metric("ROAS D0 benchmark", fmt_percent(benchmark["roas_d0"]))
-        bcol4.metric("Retention D1 benchmark", fmt_percent(benchmark["retention_d1"]))
-        bcol5.metric("Ngưỡng lệch", f"{doc_threshold:.0f}%")
+    # Benchmark ĐỔI sang nhập THEO QUỐC GIA (23/09/2026, trang "Benchmark") —
+    # Tầng 1 (đánh giá CẢ campaign, gộp mọi quốc gia) KHÔNG còn 1 benchmark
+    # app-level để so nữa (giữ nguyên PHẦN LOGIC/HIỂN THỊ campaign như cũ,
+    # theo đúng yêu cầu user — chỉ là giờ không có benchmark app-level để đọc
+    # nữa). Việc so benchmark có ý nghĩa giờ nằm ở bảng "Theo quốc gia" bên
+    # dưới (mỗi dòng dùng benchmark của ĐÚNG quốc gia đó).
+    doc_threshold = 20.0
+    benchmark = {"cpi": None, "arpu_d0": None, "roas_d0": None, "retention_d1": None}
+    st.info(
+        "ℹ️ Benchmark giờ nhập theo TỪNG QUỐC GIA (trang **Benchmark**) — Tầng 1 "
+        "bên dưới chỉ hiện số THỰC TẾ của cả campaign (không so benchmark nữa). "
+        "So sánh với benchmark, xem bảng **\"Theo quốc gia\"** ở cuối trang này."
+    )
 
     stats = cdoc.period_stats_for_campaign(raw_df, product_id, selected_campaign)
     if stats is None:
@@ -1254,12 +1277,12 @@ def page_campaign_doctor():
         elif country_raw is None or stale:
             st.info("👆 Bấm **Tải dữ liệu theo quốc gia** để xem quốc gia nào đang kéo campaign này xuống.")
         else:
-            # Truyền benchmark + ngưỡng ĐÃ NHẬP ở Tầng 1 (bên trên) — so TỪNG
-            # quốc gia với benchmark đó, thay vì chỉ xem CPI/ROAS/Retention thô
-            # không có gì để đối chiếu (user chỉ ra 23/09/2026: campaign GLOBAL
-            # không thể đánh giá CPI/LTV ở mức cả campaign, phải bóc tách từng
-            # nước — xem docstring cdoc.country_slice()).
-            country_df = cdoc.country_slice(country_raw, benchmark=benchmark, threshold_pct=doc_threshold)
+            # Benchmark giờ nhập THEO QUỐC GIA (trang "Benchmark") — mỗi dòng
+            # quốc gia trong bảng dưới đây so với ĐÚNG benchmark của chính nó
+            # (khác app-level benchmark chung dùng trước 23/09/2026 — xem
+            # docstring cdoc.country_slice() + benchmarks.get_all_country_benchmarks()).
+            benchmark_by_country = bm.get_all_country_benchmarks(product_id)
+            country_df = cdoc.country_slice(country_raw, benchmark_by_country=benchmark_by_country)
             if country_df.empty:
                 st.warning("Không có dữ liệu theo quốc gia cho campaign này trong khoảng ngày đã kéo.")
             else:
@@ -1277,8 +1300,9 @@ def page_campaign_doctor():
                 st.caption(
                     "ROAS D0 thấp nhất lên đầu — nghi phạm chính. Đã bỏ quốc gia <5 "
                     "installs (quá ít để có ý nghĩa). Cột \"CPI/LTV so benchmark\" "
-                    "và \"Cảnh báo\" dùng ĐÚNG benchmark + ngưỡng đã nhập ở Tầng 1 "
-                    "phía trên — nếu chưa nhập benchmark, 2 cột này sẽ trống."
+                    "và \"Cảnh báo\" dùng benchmark ĐÃ NHẬP CHO ĐÚNG QUỐC GIA ĐÓ ở "
+                    "trang Benchmark — quốc gia nào chưa nhập benchmark, 2 cột này "
+                    "sẽ trống."
                 )
 
     with slice_tab2:

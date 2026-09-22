@@ -262,6 +262,22 @@ def fetch_campaign_country_summary(
     )
 
 
+def list_known_countries(api_token: str, app_tokens: list, product_id: str, days_back: int = 30, **kw) -> list:
+    """THÊM 23/09/2026 — danh sách quốc gia THẬT đã từng có install cho ĐÚNG 1
+    app (lọc theo product_id, phần trước dấu "-" trong field "app") trong
+    `days_back` ngày qua. Dùng cho trang "Benchmark" — để chọn quốc gia từ
+    danh sách CÓ THẬT (khớp với dữ liệu ở bảng "Theo quốc gia"), không gõ tay
+    dễ sai chính tả/không khớp."""
+    data = call_adjust(api_token, app_tokens, "app,country", days_back, **kw)
+    rows = data.get("rows") or []
+    countries = set()
+    for row in rows:
+        app_name = row.get("app") or ""
+        if app_name.split("-")[0].strip() == product_id and row.get("country"):
+            countries.add(row["country"])
+    return sorted(countries)
+
+
 def list_known_app_prefixes(api_token: str, app_tokens: list, days_back: int = 7, **kw) -> list:
     """Lấy danh sách "product_id" (tiền tố trước dấu "-" trong field "app" thật
     của Adjust, VD "AAP874" từ "AAP874-Face Warp Prank") — THAY THẾ hoàn toàn

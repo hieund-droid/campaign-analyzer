@@ -109,7 +109,11 @@ def diagnose_tier1(stats: dict, benchmark: dict, threshold_pct: float = DEFAULT_
     }
 
 
-def country_slice(campaign_country_df: pd.DataFrame, min_installs: int = 5) -> pd.DataFrame:
+def country_slice(
+    campaign_country_df: pd.DataFrame,
+    min_installs: int = 5,
+    benchmark_by_country: dict | None = None,
+) -> pd.DataFrame:
     """Cắt lát theo quốc gia cho ĐÚNG 1 campaign — sắp ROAS D0 thấp nhất lên
     đầu (nghi phạm chính) để dễ soi.
 
@@ -126,7 +130,21 @@ def country_slice(campaign_country_df: pd.DataFrame, min_installs: int = 5) -> p
     min_installs: lọc bớt quốc gia quá ít traffic (mặc định 5) — 1-2 install
     dễ ra ROAS D0 = 0.0 (chưa kịp có revenue D0) trông như "tệ nhất" dù không
     có ý nghĩa thống kê gì, đã gặp thật khi test (145 nước, rất nhiều nước chỉ
-    1 install)."""
+    1 install).
+
+    THÊM 23/09/2026 (theo yêu cầu user — campaign GLOBAL không nhìn CPI/LTV cả
+    campaign được, phải bóc tách từng nước): thêm cột "LTV (ARPU D0)" (=
+    ROAS D0 × CPI — ĐÚNG về đại số vì ROAS_D0 = ARPU_D0 ÷ CPI luôn luôn đúng,
+    xem intraday_alerts.py để biết lý do — KHÔNG cần gọi thêm API).
+
+    ĐỔI 23/09/2026 (theo yêu cầu user — benchmark giờ nhập THEO QUỐC GIA, xem
+    benchmarks.py): `benchmark_by_country` là dict {country: {"cpi":...,
+    "arpu_d0":..., "roas_d0":..., "retention_d1":..., "threshold_pct":...}}
+    (từ `benchmarks.get_all_country_benchmarks(product_id)`) — MỖI QUỐC GIA
+    so với ĐÚNG benchmark của chính nó (không còn 1 benchmark chung cho cả
+    bảng như trước). Quốc gia nào chưa có benchmark thì cột so benchmark/
+    Cảnh báo để trống cho quốc gia đó (không suy đoán bằng benchmark nước
+    khác)."""
     if campaign_country_df is None or campaign_country_df.empty:
         return pd.DataFrame()
 
@@ -135,18 +153,62 @@ def country_slice(campaign_country_df: pd.DataFrame, min_installs: int = 5) -> p
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
+    # LTV (ARPU D0) suy ra từ ROAS D0 × CPI — KHÔNG lấy trung bình cộng qua các
+    # dòng (đã là 1 dòng/quốc gia, Adjust tự tổng hợp đúng, chỉ tính lại 1 lần).
+    df["arpu_d0"] = df["roas_ad_d0"] * df["ecpi_all"]
+
+    # Bỏ quốc gia quá ít install TRƯỚC khi tính benchmark (xem docstring) —
+    # tránh nhiễu chiếm hết đầu bảng.
+    df = df[pd.to_numeric(df["installs"], errors="coerce") >= min_installs].copy()
+
+    if benchmark_by_country:
+        def _diagnose_row(r):
+            country_bench = benchmark_by_country.get(r.get("country")) or {}
+            if not any(country_bench.values()):
+                return None
+            return diagnose_tier1(
+                {
+                    "cpi": r.get("ecpi_all"),
+                    "arpu_d0": r.get("arpu_d0"),
+                    "roas_d0": r.get("roas_ad_d0"),
+                    "retention_d1": r.get("retention_rate_d1"),
+                },
+                country_bench,
+                threshold_pct=country_bench.get("threshold_pct") or DEFAULT_THRESHOLD_PCT,
+            )
+
+        bench_results = df.apply(_diagnose_row, axis=1)
+        df["_cpi_pct_vs_bench"] = [b["cpi_pct_vs_bench"] if b else None for b in bench_results]
+        df["_arpu_pct_vs_bench"] = [b["arpu_pct_vs_bench"] if b else None for b in bench_results]
+        df["_canh_bao"] = [
+            " · ".join(
+                p for p in (
+                    ("🔴 CPI đắt" if b["cpi_dat"] else None),
+                    ("🔴 LTV thấp" if b["arpu_kem"] else None),
+                ) if p
+            ) if b else ""
+            for b in bench_results
+        ]
+
     df = df.rename(
         columns={
             "country": "Quốc gia",
             "installs": "Installs",
             "ecpi_all": "CPI",
+            "arpu_d0": "LTV (ARPU D0)",
             "roas_ad_d0": "ROAS D0",
             "retention_rate_d1": "Retention D1",
+            "_cpi_pct_vs_bench": "CPI so benchmark",
+            "_arpu_pct_vs_bench": "LTV so benchmark",
+            "_canh_bao": "Cảnh báo",
         }
     )
-    # Bỏ quốc gia quá ít install (xem docstring) — tránh nhiễu chiếm hết đầu bảng.
-    df = df[df["Installs"] >= min_installs]
-    cols = [c for c in ["Quốc gia", "Installs", "CPI", "ROAS D0", "Retention D1"] if c in df.columns]
+    cols = [
+        c for c in [
+            "Quốc gia", "Installs", "CPI", "LTV (ARPU D0)", "ROAS D0", "Retention D1",
+            "CPI so benchmark", "LTV so benchmark", "Cảnh báo",
+        ] if c in df.columns
+    ]
     return df[cols].sort_values("ROAS D0").reset_index(drop=True)
 
 

@@ -21,7 +21,12 @@ import os
 DOCTOR_BENCHMARK_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "doctor_benchmarks.json"
 )
-DOCTOR_BENCHMARK_KEYS = ["cpi", "arpu_d0", "roas_d0", "retention_d1"]
+# THÊM "threshold_pct" (23/09/2026) — chuyển ô nhập benchmark (5 ô, gồm cả
+# ngưỡng lệch coi là có vấn đề) từ trang Xét nghiệm LÊN SIDEBAR theo yêu cầu
+# user ("nhập 1 lần dùng cho mọi tính năng") — lưu CHUNG 1 chỗ với benchmark
+# CPI/ARPU/ROAS/Retention cho gọn, dù về bản chất là 1 con số % ngưỡng, không
+# phải benchmark tuyệt đối.
+DOCTOR_BENCHMARK_KEYS = ["cpi", "arpu_d0", "roas_d0", "retention_d1", "threshold_pct"]
 
 
 def load_doctor_benchmarks() -> dict:

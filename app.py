@@ -409,6 +409,72 @@ def get_known_product_ids(app_tokens_raw: str, api_token: str):
 
 
 # ══════════════════════════════════════════════════════════════════════
+# Sidebar — Benchmark cho Xét nghiệm (chuyển từ trang Xét nghiệm lên đây
+# 23/09/2026, theo yêu cầu user: "chỉ cần nhập 1 lần rồi dùng cho tất cả các
+# tính năng trong app" — ngang hàng với token Adjust, không cần vào sâu trang
+# Xét nghiệm mới thấy/sửa được. Đặt SAU get_known_product_ids() (cần hàm này
+# để có danh sách app) — vẫn chạy Ở MODULE-LEVEL nên hiện xuyên suốt mọi
+# trang, giống khối token phía trên.
+# ══════════════════════════════════════════════════════════════════════
+with st.sidebar:
+    st.divider()
+    st.markdown("**📏 Benchmark**")
+    _bench_api = st.session_state.get("adjust_api_token", "")
+    _bench_apps_raw = st.session_state.get("adjust_app_tokens", "")
+    _bench_product_ids, _bench_ids_err = get_known_product_ids(_bench_apps_raw, _bench_api)
+    if _bench_ids_err:
+        st.caption(_bench_ids_err)
+    elif not _bench_product_ids:
+        st.caption("Chưa tìm thấy app nào cho token này.")
+    else:
+        _bench_app = st.selectbox("App", _bench_product_ids, key="sidebar_bench_app")
+        _saved_bench = bm.get_doctor_benchmarks(_bench_app)
+        with st.expander(f"Benchmark cho {_bench_app}", expanded=False):
+            st.caption(
+                "Tách riêng LTV (ARPU D0) khỏi ROAS D0 — ROAS D0 = LTV ÷ CPI, "
+                "1 mình ROAS không biết được xấu vì CPI đắt hay vì LTV tụt."
+            )
+            # key CÓ tên app (đổi theo _bench_app) — để widget TỰ RESET giá trị
+            # đúng app khi đổi app ở selectbox trên (nếu dùng key cố định,
+            # Streamlit sẽ giữ giá trị cũ của app trước, không load lại đúng số
+            # đã lưu của app mới chọn).
+            _b_cpi = st.number_input(
+                "CPI bình thường ($)", min_value=0.0,
+                value=float(_saved_bench.get("cpi") or 0.0), step=0.001, format="%.4f",
+                key=f"sidebar_bench_cpi_{_bench_app}",
+            )
+            _b_arpu = st.number_input(
+                "LTV (ARPU D0) bình thường ($)", min_value=0.0,
+                value=float(_saved_bench.get("arpu_d0") or 0.0), step=0.001, format="%.4f",
+                key=f"sidebar_bench_arpu_{_bench_app}",
+            )
+            _b_roas = st.number_input(
+                "ROAS D0 bình thường (%, VD 15 = 15%)", min_value=0.0,
+                value=float((_saved_bench.get("roas_d0") or 0.0) * 100), step=1.0,
+                key=f"sidebar_bench_roas_{_bench_app}",
+            )
+            _b_retention = st.number_input(
+                "Retention D1 bình thường (%, VD 25 = 25%)", min_value=0.0,
+                value=float((_saved_bench.get("retention_d1") or 0.0) * 100), step=1.0,
+                key=f"sidebar_bench_retention_{_bench_app}",
+            )
+            _b_threshold = st.number_input(
+                "Ngưỡng lệch coi là có vấn đề (%)", min_value=5.0,
+                value=float(_saved_bench.get("threshold_pct") or 20.0), step=5.0,
+                key=f"sidebar_bench_threshold_{_bench_app}",
+            )
+            if st.button("💾 Lưu benchmark", key=f"sidebar_bench_save_{_bench_app}"):
+                bm.save_doctor_benchmarks(
+                    _bench_app,
+                    {
+                        "cpi": _b_cpi, "arpu_d0": _b_arpu, "roas_d0": _b_roas / 100,
+                        "retention_d1": _b_retention / 100, "threshold_pct": _b_threshold,
+                    },
+                )
+                st.success(f"Đã lưu benchmark cho {_bench_app}.")
+
+
+# ══════════════════════════════════════════════════════════════════════
 # TRANG — Adjust
 # ══════════════════════════════════════════════════════════════════════
 def page_adjust():
@@ -1018,56 +1084,30 @@ def page_campaign_doctor():
         key="doc_selected_campaign",
     )
 
-    st.markdown("**Benchmark \"bình thường\" cho app này** (tự nhập tay, dùng để so tầng 1)")
-    st.caption(
-        "Tách riêng ARPU D0 (LTV) khỏi ROAS D0 — ROAS D0 = LTV ÷ CPI, 1 mình ROAS "
-        "không biết được ROAS xấu là do CPI đắt lên hay do LTV tụt xuống."
-    )
+    # Benchmark ĐÃ CHUYỂN lên sidebar (23/09/2026, theo yêu cầu user: "nhập 1
+    # lần dùng cho tất cả tính năng") — trang này chỉ ĐỌC, không còn form nhập
+    # inline nữa. Muốn sửa, vào mục "📏 Benchmark" ở sidebar bên trái.
     saved_bench = bm.get_doctor_benchmarks(product_id)
-    bcol1, bcol2, bcol3, bcol4, bcol5 = st.columns(5)
-    with bcol1:
-        bench_cpi = st.number_input(
-            "CPI bình thường ($)", min_value=0.0, value=float(saved_bench.get("cpi") or 0.0),
-            step=0.001, format="%.4f", key="doc_bench_cpi",
-        )
-    with bcol2:
-        bench_arpu = st.number_input(
-            "LTV (ARPU D0) bình thường ($)", min_value=0.0, value=float(saved_bench.get("arpu_d0") or 0.0),
-            step=0.001, format="%.4f", key="doc_bench_arpu",
-        )
-    with bcol3:
-        bench_roas = st.number_input(
-            "ROAS D0 bình thường (%, VD 15 = 15%)", min_value=0.0,
-            value=float((saved_bench.get("roas_d0") or 0.0) * 100), step=1.0, key="doc_bench_roas",
-        )
-    with bcol4:
-        bench_retention = st.number_input(
-            "Retention D1 bình thường (%, VD 25 = 25%)", min_value=0.0,
-            value=float((saved_bench.get("retention_d1") or 0.0) * 100), step=1.0, key="doc_bench_retention",
-        )
-    with bcol5:
-        doc_threshold = st.number_input(
-            "Ngưỡng lệch coi là có vấn đề (%)", min_value=5.0, value=20.0, step=5.0, key="doc_threshold"
-        )
-
-    if st.button("💾 Lưu benchmark cho app này", key="doc_save_bench"):
-        bm.save_doctor_benchmarks(
-            product_id,
-            {
-                "cpi": bench_cpi,
-                "arpu_d0": bench_arpu,
-                "roas_d0": bench_roas / 100,
-                "retention_d1": bench_retention / 100,
-            },
-        )
-        st.success(f"Đã lưu benchmark chẩn đoán cho {product_id}.")
-
+    doc_threshold = saved_bench.get("threshold_pct") or 20.0
     benchmark = {
-        "cpi": bench_cpi or None,
-        "arpu_d0": bench_arpu or None,
-        "roas_d0": (bench_roas / 100) or None,
-        "retention_d1": (bench_retention / 100) or None,
+        "cpi": saved_bench.get("cpi"),
+        "arpu_d0": saved_bench.get("arpu_d0"),
+        "roas_d0": saved_bench.get("roas_d0"),
+        "retention_d1": saved_bench.get("retention_d1"),
     }
+    if not any(benchmark.values()):
+        st.info(
+            f"👈 Chưa có benchmark cho app **{product_id}** — vào mục "
+            "**📏 Benchmark** ở sidebar bên trái để nhập (dùng chung cho cả "
+            "Tầng 1 và bảng \"Theo quốc gia\" bên dưới)."
+        )
+    else:
+        bcol1, bcol2, bcol3, bcol4, bcol5 = st.columns(5)
+        bcol1.metric("CPI benchmark", fmt_money(benchmark["cpi"]))
+        bcol2.metric("LTV benchmark", fmt_money(benchmark["arpu_d0"]))
+        bcol3.metric("ROAS D0 benchmark", fmt_percent(benchmark["roas_d0"]))
+        bcol4.metric("Retention D1 benchmark", fmt_percent(benchmark["retention_d1"]))
+        bcol5.metric("Ngưỡng lệch", f"{doc_threshold:.0f}%")
 
     stats = cdoc.period_stats_for_campaign(raw_df, product_id, selected_campaign)
     if stats is None:
@@ -1202,7 +1242,12 @@ def page_campaign_doctor():
         elif country_raw is None or stale:
             st.info("👆 Bấm **Tải dữ liệu theo quốc gia** để xem quốc gia nào đang kéo campaign này xuống.")
         else:
-            country_df = cdoc.country_slice(country_raw)
+            # Truyền benchmark + ngưỡng ĐÃ NHẬP ở Tầng 1 (bên trên) — so TỪNG
+            # quốc gia với benchmark đó, thay vì chỉ xem CPI/ROAS/Retention thô
+            # không có gì để đối chiếu (user chỉ ra 23/09/2026: campaign GLOBAL
+            # không thể đánh giá CPI/LTV ở mức cả campaign, phải bóc tách từng
+            # nước — xem docstring cdoc.country_slice()).
+            country_df = cdoc.country_slice(country_raw, benchmark=benchmark, threshold_pct=doc_threshold)
             if country_df.empty:
                 st.warning("Không có dữ liệu theo quốc gia cho campaign này trong khoảng ngày đã kéo.")
             else:
@@ -1210,11 +1255,19 @@ def page_campaign_doctor():
                     country_df, width="stretch", hide_index=True,
                     column_config={
                         "CPI": st.column_config.NumberColumn(format="$%.4f"),
+                        "LTV (ARPU D0)": st.column_config.NumberColumn(format="$%.4f"),
                         "ROAS D0": st.column_config.NumberColumn(format="percent"),
                         "Retention D1": st.column_config.NumberColumn(format="percent"),
+                        "CPI so benchmark": st.column_config.NumberColumn(format="%.1f%%"),
+                        "LTV so benchmark": st.column_config.NumberColumn(format="%.1f%%"),
                     },
                 )
-                st.caption("ROAS D0 thấp nhất lên đầu — nghi phạm chính. Đã bỏ quốc gia <5 installs (quá ít để có ý nghĩa).")
+                st.caption(
+                    "ROAS D0 thấp nhất lên đầu — nghi phạm chính. Đã bỏ quốc gia <5 "
+                    "installs (quá ít để có ý nghĩa). Cột \"CPI/LTV so benchmark\" "
+                    "và \"Cảnh báo\" dùng ĐÚNG benchmark + ngưỡng đã nhập ở Tầng 1 "
+                    "phía trên — nếu chưa nhập benchmark, 2 cột này sẽ trống."
+                )
 
     with slice_tab2:
         st.caption("🔒 Cần token Adjust cá nhân — nhập ở sidebar bên trái.")

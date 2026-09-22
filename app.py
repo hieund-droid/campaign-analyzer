@@ -22,12 +22,12 @@ Giờ CHỈ CÒN 3 trang, TẤT CẢ đều 100% dữ liệu Adjust (không phâ
 nữa vì không còn nguồn nào khác để tách):
 - "Adjust": installs, CPI, ad revenue, ROAS D0/D7/D30, retention D1/D7, ARPU +
   "Theo dõi trong ngày" (so các mốc giờ trong ngày, dùng `campaign_snapshots.py`).
-- "Cảnh báo": 2 phần — (1) "Trong ngày (thời gian thực)": so với các mốc 1/2/3
-  tiếng trước (không phải chỉ "lần đầu hôm nay" — đổi 21/09/2026 vì rủi ro
-  "lần đầu" có thể đã là buổi chiều nếu sáng không ai mở app), dùng
-  `campaign_snapshots.py` (chia sẻ kho snapshot với trang Adjust); (2) "Theo
-  xu hướng nhiều ngày": phát hiện đột biến/giảm dần CPI/LTV(ARPU D0)/ROAS D0
-  giữa các NGÀY ĐÃ CHỐT — xem `campaign_alerts.py`.
+- "Cảnh báo": CHỈ CÒN phần "Trong ngày (thời gian thực)" (đã bỏ hẳn mục "xu
+  hướng nhiều ngày" 22/09/2026 theo yêu cầu user: "tạm thời chỉ muốn build
+  theo hướng realtime" — file `campaign_alerts.py` không còn dùng, đã xóa) —
+  so với các mốc 1/2/3 tiếng trước (không phải chỉ "lần đầu hôm nay" — đổi
+  21/09/2026 vì rủi ro "lần đầu" có thể đã là buổi chiều nếu sáng không ai mở
+  app), dùng `campaign_snapshots.py` (chia sẻ kho snapshot với trang Adjust).
 - "Xét nghiệm" (đổi tên từ "Chẩn đoán" 22/09/2026, tên cũ "Campaign Doctor"):
   chọn 1 campaign đang bị cảnh báo (đọc từ trang Cảnh báo) → tầng 1 (CPI đắt/
   User kém, so benchmark tự nhập) → tầng 2 (CPM/CTR/CVR so peer NẾU CPI đắt —
@@ -52,7 +52,6 @@ from dotenv import load_dotenv
 
 import adjust_client as ac
 import benchmarks as bm
-import campaign_alerts as calerts
 import campaign_doctor as cdoc
 import campaign_snapshots as csnap
 from streamlit_local_storage import LocalStorage
@@ -646,13 +645,18 @@ def page_adjust():
 
 
 # ══════════════════════════════════════════════════════════════════════
-# TRANG — Cảnh báo (đột biến / giảm dần CPI + ROAS D0 theo từng campaign)
+# TRANG — Cảnh báo (THỜI GIAN THỰC, trong ngày — CPI/LTV/ROAS D0 theo campaign)
 # ══════════════════════════════════════════════════════════════════════
+# ĐÃ BỎ HẲN phần "xu hướng nhiều ngày" (so sánh giữa các ngày đã chốt) —
+# 22/09/2026, theo yêu cầu user: "tạm thời chỉ muốn build theo hướng realtime,
+# trả lời được câu hỏi tại sao ROAS tụt TRONG NGÀY". Module `campaign_alerts.py`
+# (spike/decline theo ngày) không còn dùng ở đâu trong app.py nữa — ĐÃ XÓA file.
 def page_alerts():
     st.title("Cảnh báo")
     st.caption(
-        "Phát hiện CPI tăng bất thường / ROAS D0 tụt bất thường theo TỪNG CAMPAIGN — "
-        "dùng riêng dữ liệu Adjust, áp dụng cho MỌI channel (không chỉ Meta)."
+        "Phát hiện CPI tăng / LTV (ARPU D0) giảm / ROAS D0 tụt NGAY TRONG NGÀY "
+        "theo TỪNG CAMPAIGN — so với các mốc 1/2/3 tiếng trước, để biết ROAS "
+        "biến động là do chi phí đắt lên hay do giá trị user tụt xuống."
     )
 
     al_api_token = st.session_state.get("adjust_api_token", "")
@@ -671,24 +675,18 @@ def page_alerts():
     with col1:
         al_product_id = st.selectbox("App (product_id)", known_product_ids, key="al_product")
     with col2:
-        # Bỏ "60 ngày qua" (dễ timeout với app nhiều dữ liệu — xem GHI_CHU_TIEN_DO.md
-        # mục sửa lỗi timeout 22/09/2026) — thêm nhiều mốc ngắn hơn để chọn đúng
-        # mức cần, đỡ phải kéo dư ngày không cần thiết.
+        # Khoảng ngày này KHÔNG dùng để phát hiện xu hướng nữa (đã bỏ) — chỉ
+        # còn dùng làm nguồn dữ liệu cho trang "Xét nghiệm" (tầng 1/tầng 2 so
+        # benchmark + peer average, tính trên cả khoảng ngày này).
         AL_DATE_PRESETS = {
             "3 ngày qua": 3, "7 ngày qua": 7, "14 ngày qua": 14,
             "21 ngày qua": 21, "28 ngày qua": 28, "30 ngày qua": 30,
         }
         al_date_choice = st.selectbox(
-            "Khoảng ngày kéo (cần đủ dài để có mốc so sánh)",
+            "Khoảng ngày kéo (dùng cho trang Xét nghiệm)",
             list(AL_DATE_PRESETS.keys()), index=2, key="al_date",
         )
         al_days_back = AL_DATE_PRESETS[al_date_choice]
-    if al_days_back < 14:
-        st.caption(
-            "⚠️ Mục \"Cảnh báo theo xu hướng nhiều ngày\" cần tối thiểu 8 ngày để "
-            "phát hiện đột biến, 14 ngày để phát hiện giảm dần — chọn ít hơn sẽ "
-            "thiếu hoặc trống 1 phần bảng đó. Mục \"Trong ngày\" không bị ảnh hưởng."
-        )
     fcol_apply, fcol_force = st.columns([1, 3])
     with fcol_apply:
         al_fetch_clicked = st.button("Apply", type="primary", key="al_fetch")
@@ -702,15 +700,13 @@ def page_alerts():
         )
 
     al_min_installs = st.number_input(
-        "Install tối thiểu để tính vào cảnh báo (áp dụng cho cả 2 mục bên dưới)",
+        "Install tối thiểu để tính vào cảnh báo",
         min_value=0, value=30, step=10, key="al_min_installs",
-        help="Campaign có ít install hơn mức này sẽ bị bỏ qua ở CẢ 2 mục cảnh "
-        "báo bên dưới — quá ít dữ liệu dễ báo động giả (VD 1-2 install cũng đủ "
-        "làm số nhảy vọt vô nghĩa).",
+        help="Campaign có ít install hơn mức này sẽ bị bỏ qua — quá ít dữ liệu "
+        "dễ báo động giả (VD 1-2 install cũng đủ làm số nhảy vọt vô nghĩa).",
     )
 
-    if "al_daily_df" not in st.session_state:
-        st.session_state.al_daily_df = None
+    if "al_raw_df" not in st.session_state:
         st.session_state.al_raw_df = None
         st.session_state.al_product_used = None
         st.session_state.al_days_back_used = None
@@ -718,35 +714,32 @@ def page_alerts():
         st.session_state.al_warning = None
 
     if al_fetch_clicked:
-        # LUÔN kéo kèm "hôm nay" (include_today=True) — không chỉ để phân tích
-        # xu hướng nhiều ngày đã chốt, mà còn để CHỤP SNAPSHOT trong ngày (xem
-        # campaign_snapshots.py) phục vụ mục "Cảnh báo TRONG NGÀY" bên dưới —
-        # user phản ánh (16/09/2026): chọn 30 ngày không giúp biết CPI/ROAS D0
-        # thay đổi NGAY TRONG NGÀY (VD sáng rẻ, chiều tăng vọt) để action kịp.
+        # LUÔN kéo kèm "hôm nay" (include_today=True) — để CHỤP SNAPSHOT trong
+        # ngày (xem campaign_snapshots.py) phục vụ mục cảnh báo realtime bên
+        # dưới. Phần ngày đã chốt (historical_df) vẫn giữ lại cho trang "Xét
+        # nghiệm" dùng (tầng 1/tầng 2 so benchmark + peer average).
         adjust_df, adjust_err, adjust_warning = load_adjust_data(
             al_days_back, al_app_tokens_raw, al_api_token, include_today=True, include_country=False
         )
         st.session_state.al_warning = adjust_warning
         if adjust_err:
             st.session_state.al_err = adjust_err
-            st.session_state.al_daily_df = None
+            st.session_state.al_raw_df = None
         else:
             st.session_state.al_err = None
             today_str = csnap.today_str_vn()
-            # Tách "hôm nay" ra khỏi phần phân tích xu hướng nhiều ngày (day-over-
-            # day) — số hôm nay CHƯA CHỐT, lẫn vào sẽ làm sai lệch so sánh ngày/
-            # tuần (đã chốt quy tắc này từ đầu dự án, xem adjust_client.py).
+            # Tách "hôm nay" (chưa chốt, dùng để chụp snapshot realtime) khỏi
+            # phần ngày đã chốt (historical_df — lưu cho trang "Xét nghiệm" dùng
+            # riêng, KHÔNG liên quan phần cảnh báo realtime ở trang này nữa).
             historical_df = adjust_df[adjust_df["day"] != today_str] if adjust_df is not None and not adjust_df.empty else adjust_df
             today_df = adjust_df[adjust_df["day"] == today_str] if adjust_df is not None and not adjust_df.empty else adjust_df
 
-            st.session_state.al_daily_df = calerts.build_campaign_daily(historical_df, al_product_id)
-            # Lưu lại df thô (chưa gộp theo campaign+day, còn đủ retention_rate_d1
-            # — KHÔNG còn cột "country" nữa, đã bỏ để nhanh hơn, xem include_country
-            # ở load_adjust_data()) + product_id/khoảng ngày đang dùng — trang
-            # "Xét nghiệm" tái sử dụng cho tầng 1 + peer average, KHÔNG gọi lại
-            # Adjust API. Riêng phần "cắt lát theo quốc gia" ở Xét nghiệm phải kéo
-            # RIÊNG (fetch_campaign_country_summary, lọc đúng 1 campaign) vì
-            # raw_df này không còn country.
+            # Lưu lại df thô (KHÔNG còn cột "country", đã bỏ để nhanh hơn, xem
+            # include_country ở load_adjust_data()) + product_id/khoảng ngày
+            # đang dùng — trang "Xét nghiệm" tái sử dụng cho tầng 1 + peer
+            # average, KHÔNG gọi lại Adjust API. Riêng phần "cắt lát theo quốc
+            # gia" ở Xét nghiệm phải kéo RIÊNG (fetch_campaign_country_summary,
+            # lọc đúng 1 campaign) vì raw_df này không còn country.
             st.session_state.al_raw_df = historical_df
             st.session_state.al_product_used = al_product_id
             st.session_state.al_days_back_used = al_days_back
@@ -772,14 +765,13 @@ def page_alerts():
     if st.session_state.al_warning:
         st.warning(f"⚠️ Adjust cảnh báo: {st.session_state.al_warning}")
 
-    if st.session_state.al_daily_df is None:
+    if st.session_state.al_raw_df is None:
         st.info("👆 Chọn app + khoảng ngày, nhập token Adjust rồi bấm **Apply** để bắt đầu.")
         return
 
-    # ── Cảnh báo TRONG NGÀY (thời gian thực) — hiện TRƯỚC phần xu hướng nhiều
-    # ngày, vì đây là phần cần action NGAY. Dùng snapshot đã chụp ở app này lẫn
-    # ở trang Adjust (chia sẻ chung kho snapshot theo field "app" Adjust) — nên
-    # nếu chưa ai chụp lần 2 hôm nay (cách nhau ≥3 tiếng) thì chưa có gì để so.
+    # Dùng snapshot đã chụp ở app này lẫn ở trang Adjust (chia sẻ chung kho
+    # snapshot theo field "app" Adjust) — nếu chưa ai chụp lần 2 hôm nay (cách
+    # nhau ≥1 tiếng) thì chưa có gì để so.
     if st.session_state.al_raw_df is not None and not st.session_state.al_raw_df.empty:
         apps_in_scope = st.session_state.al_raw_df["app"].dropna().unique().tolist()
     else:
@@ -789,8 +781,8 @@ def page_alerts():
     # dựa vào historical_df để không bỏ sót.
     st.subheader("⚡ Cảnh báo trong ngày (thời gian thực)")
     st.caption(
-        "So lần chụp ĐẦU TIÊN hôm nay (thường = sáng) với lần MỚI NHẤT (thường = "
-        "bây giờ) — tự động chụp mỗi khi ai đó xem trang này hoặc trang Adjust với "
+        "So với các mốc ~1/2/3 tiếng trước (tự động chọn snapshot gần mốc đó "
+        "nhất) — tự động chụp mỗi khi ai đó xem trang này hoặc trang Adjust với "
         f"\"Hôm nay\" (cách nhau ≥{csnap.MIN_INTERVAL_HOURS} tiếng). Theo dõi CẢ 3: "
         "CPI (chi phí), LTV/ARPU D0 (giá trị user), ROAS D0 (= LTV ÷ CPI) — để "
         "biết ROAS biến động là do chi phí đắt lên hay do giá trị user tụt xuống."
@@ -811,6 +803,9 @@ def page_alerts():
                 app_name, threshold_pct=float(al_realtime_pct), min_installs=int(al_min_installs)
             )
         )
+    # Lưu lại để trang "Xét nghiệm" đọc danh sách campaign đang bị cảnh báo
+    # (đã đổi nguồn từ "xu hướng nhiều ngày" đã bỏ sang danh sách realtime này).
+    st.session_state.al_realtime_flagged = all_flagged_today
 
     if not all_flagged_today:
         st.info(
@@ -883,80 +878,6 @@ def page_alerts():
                 },
             )
 
-    st.divider()
-    st.subheader("Cảnh báo theo xu hướng nhiều ngày (dữ liệu đã chốt)")
-    st.caption(
-        "Khác với mục trên — đây so sánh giữa các NGÀY ĐÃ CHỐT (KHÔNG gồm hôm "
-        "nay, vì số hôm nay vẫn đang chạy chưa xong), dùng để phát hiện xu "
-        "hướng kéo dài nhiều ngày."
-    )
-    ncol1, ncol2 = st.columns(2)
-    with ncol1:
-        al_spike_pct = st.number_input(
-            "Mức thay đổi ĐỘT NGỘT so với tuần trước (%)",
-            min_value=5, value=30, step=5, key="al_spike_pct",
-            help="So NGÀY ĐÃ CHỐT GẦN NHẤT (KHÔNG phải hôm nay) với mức bình "
-            "thường của 7 ngày trước đó — lệch quá mức này (dù tăng hay giảm) "
-            "sẽ bị gắn cờ \"đột biến\".",
-        )
-    with ncol2:
-        al_decline_pct = st.number_input(
-            "Mức xấu đi DẦN qua nhiều tuần (%)",
-            min_value=5, value=20, step=5, key="al_decline_pct",
-            help="So trung bình 7 ngày đã chốt gần đây với 7 ngày trước đó nữa "
-            "— CPI tăng hoặc LTV/ROAS giảm quá mức này bị gắn cờ \"giảm dần\" "
-            "(xu hướng xấu kéo dài nhiều ngày, không phải giật cục 1 lần).",
-        )
-
-    if st.session_state.al_daily_df.empty:
-        st.warning("Không có dữ liệu campaign nào cho app/khoảng ngày này.")
-        return
-
-    analysis = calerts.analyze_campaigns(
-        st.session_state.al_daily_df,
-        min_installs=int(al_min_installs),
-        spike_threshold_pct=float(al_spike_pct),
-        decline_threshold_pct=float(al_decline_pct),
-    )
-    # Lưu lại để trang "Xét nghiệm" đọc danh sách campaign đang bị cảnh báo,
-    # không phải tính lại từ đầu.
-    st.session_state.al_analysis_df = analysis
-
-    if analysis.empty:
-        st.warning(
-            "Không có campaign nào đủ installs tối thiểu để xét — thử giảm "
-            "\"Installs tối thiểu\" hoặc kéo khoảng ngày dài hơn."
-        )
-        return
-
-    n_alert = (analysis["Cảnh báo"] != "Bình thường").sum()
-    kcol1, kcol2 = st.columns(2)
-    kcol1.metric("Campaign đang xét", len(analysis))
-    kcol2.metric("Có cảnh báo", int(n_alert))
-
-    st.dataframe(
-        analysis, width="stretch", hide_index=True,
-        column_config={
-            "CPI gần nhất": st.column_config.NumberColumn(format="$%.4f"),
-            "CPI % lệch vs TB 7 ngày trước": st.column_config.NumberColumn(format="%.1f%%"),
-            "LTV (ARPU D0) gần nhất": st.column_config.NumberColumn(format="$%.4f"),
-            "LTV % lệch vs TB 7 ngày trước": st.column_config.NumberColumn(format="%.1f%%"),
-            "ROAS D0 gần nhất": st.column_config.NumberColumn(format="percent"),
-            "ROAS D0 % lệch vs TB 7 ngày trước": st.column_config.NumberColumn(format="%.1f%%"),
-            "CPI % đổi (7 ngày vs 7 ngày trước đó)": st.column_config.NumberColumn(format="%.1f%%"),
-            "LTV % đổi (7 ngày vs 7 ngày trước đó)": st.column_config.NumberColumn(format="%.1f%%"),
-            "ROAS D0 % đổi (7 ngày vs 7 ngày trước đó)": st.column_config.NumberColumn(format="%.1f%%"),
-        },
-    )
-    st.caption(
-        "LTV = ARPU D0 (doanh thu/install tính tới D0) — tách riêng khỏi ROAS D0 "
-        "để biết ROAS biến động là do CPI (chi phí) hay do LTV (giá trị user) — "
-        "ROAS D0 = LTV ÷ CPI, 1 mình ROAS không tách được 2 nguyên nhân này. "
-        "🔴 = xấu rõ rệt (CPI tăng vọt / LTV hoặc ROAS D0 tụt vọt) · 🟢 = tốt bất "
-        "thường (nên kiểm tra lại không phải lỗi tracking) · 🟠 = xu hướng xấu "
-        "kéo dài nhiều ngày (không phải giật cục 1 ngày). Cột trống = chưa đủ "
-        "dữ liệu lịch sử để so sánh (cần kéo khoảng ngày dài hơn)."
-    )
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -970,27 +891,41 @@ def page_campaign_doctor():
         "Nên làm gì? Quốc gia/creative nào đang kéo xuống?"
     )
 
-    if st.session_state.get("al_analysis_df") is None or st.session_state.get("al_raw_df") is None:
+    # Nguồn danh sách campaign đang bị cảnh báo: ĐỔI sang danh sách REALTIME
+    # (22/09/2026, sau khi bỏ "xu hướng nhiều ngày" khỏi trang Cảnh báo) — xem
+    # `al_realtime_flagged` (list dict từ csnap.list_flagged_hours_ago()), lưu
+    # bởi page_alerts().
+    if st.session_state.get("al_realtime_flagged") is None or st.session_state.get("al_raw_df") is None:
         st.info(
             "👆 Vào trang **Cảnh báo** trước — chọn app + khoảng ngày, nhập token "
-            "Adjust, bấm **Apply** — rồi quay lại đây để chọn campaign cần chẩn đoán."
+            "Adjust, bấm **Apply** — rồi quay lại đây để chọn campaign cần xét nghiệm."
         )
         return
 
-    analysis_df = st.session_state.al_analysis_df
+    realtime_flagged = st.session_state.al_realtime_flagged
     product_id = st.session_state.al_product_used
     raw_df = st.session_state.al_raw_df
     days_back_used = st.session_state.al_days_back_used
 
-    flagged = analysis_df[analysis_df["Cảnh báo"] != "Bình thường"]
-    if flagged.empty:
-        st.success(f"✅ App {product_id} hiện không có campaign nào bị cảnh báo — chưa cần chẩn đoán.")
+    if not realtime_flagged:
+        st.success(f"✅ App {product_id} hiện không có campaign nào bị cảnh báo trong ngày — chưa cần xét nghiệm.")
         return
 
-    campaign_options = flagged["Campaign"].tolist()
-    label_map = dict(zip(flagged["Campaign"], flagged["Cảnh báo"]))
+    campaign_options = [f["campaign"] for f in realtime_flagged]
+
+    def _flags_label(f: dict) -> str:
+        parts = []
+        if f.get("cpi_bad"):
+            parts.append("CPI tăng")
+        if f.get("roas_bad"):
+            parts.append("ROAS giảm")
+        if f.get("arpu_bad"):
+            parts.append("LTV giảm")
+        return " · ".join(parts) if parts else "?"
+
+    label_map = {f["campaign"]: _flags_label(f) for f in realtime_flagged}
     selected_campaign = st.selectbox(
-        f"Chọn campaign cần chẩn đoán (app {product_id}, {len(campaign_options)} campaign đang bị cảnh báo)",
+        f"Chọn campaign cần xét nghiệm (app {product_id}, {len(campaign_options)} campaign đang bị cảnh báo trong ngày)",
         campaign_options,
         format_func=lambda c: f"[{label_map[c]}] {c[:70]}{'...' if len(c) > 70 else ''}",
         key="doc_selected_campaign",

@@ -187,13 +187,44 @@ def fetch_creative_summary(api_token: str, app_tokens: list, days_back: int = DA
 DETAIL_DIMENSIONS_HOURLY = "app,hour,campaign"
 
 
-def fetch_hourly_today(api_token: str, app_tokens: list, **kw) -> dict:
+def fetch_hourly_today(api_token: str, app_tokens: list, ad_spend_mode: str | None = None, **kw) -> dict:
     """Kéo dữ liệu THEO GIỜ của HÔM NAY. Mỗi dòng trả về là số PHÁT SINH TRONG
     giờ đó (KHÔNG PHẢI cộng dồn) — muốn biết "tính đến giờ X" phải tự cộng dồn
     (xem intraday_alerts.build_cumulative_by_hour()). Luôn ép days_back=1 +
-    include_today=True vì mục đích DUY NHẤT là xem trong ngày hôm nay."""
+    include_today=True vì mục đích DUY NHẤT là xem trong ngày hôm nay.
+
+    ad_spend_mode: THÊM 23/09/2026 — cho override AD_SPEND_MODE mặc định
+    ("network"). Đã kiểm chứng qua tài liệu Adjust (help.adjust.com/en/article/
+    how-ad-spend-source-affects-your-data):
+      - "network" (mặc định): Adjust TỰ ĐI PULL lại từ API network — chính
+        xác hơn nhưng CHỈ 1 LẦN/NGÀY cho Meta/Facebook (đã kiểm chứng —
+        nguyên nhân "chi phí đứng yên cả ngày" user gặp phải 23/09/2026).
+      - "adjust" (còn gọi "Attribution"): chi phí được GẮN NGAY LÚC install/
+        click xảy ra — gần như tức thời trong ngày — NHƯNG là giá trị TĨNH,
+        không tự cập nhật lại khi network đổi giá thầu sau đó → có thể THIẾU
+        SÓT so với số thật. Đánh đổi: nhanh hơn nhưng kém chính xác hơn.
+      - "mixed": ưu tiên "network" nếu network đã tích hợp, không thì dùng
+        "adjust".
+    Dùng "adjust" cho mục đích XEM XU HƯỚNG NHANH trong ngày (Cảnh báo), KHÔNG
+    dùng để báo cáo chính thức (số có thể thấp hơn thực tế)."""
+    extra_params = {"ad_spend_mode": ad_spend_mode} if ad_spend_mode else None
     return call_adjust(
         api_token, app_tokens, DETAIL_DIMENSIONS_HOURLY, days_back=1,
+        include_today=True, extra_params=extra_params, **kw
+    )
+
+
+def fetch_campaign_channel_map(api_token: str, app_tokens: list, **kw) -> dict:
+    """THÊM 23/09/2026 — cho biết mỗi campaign chạy qua NETWORK nào (dimension
+    "channel", VD "Facebook", "Organic", "Google Ads"...). Dùng để trả lời câu
+    hỏi "campaign đang bị đứng chi phí này có phải Meta không" TRƯỚC KHI cân
+    nhắc nối thẳng Meta Marketing API (network_cost qua Adjust có độ trễ do
+    Adjust phải đi lấy lại từ network — dimension "channel" đã kiểm chứng hoạt
+    động tốt kết hợp với "campaign", KHÔNG cần "day"/"hour" vì chỉ cần biết
+    network, không cần theo thời gian). Ép days_back=1, include_today=True để
+    chỉ xét campaign đang hoạt động/được nhắc tới hôm nay."""
+    return call_adjust(
+        api_token, app_tokens, "app,campaign,channel", days_back=1,
         include_today=True, **kw
     )
 

@@ -302,16 +302,19 @@ def load_campaign_country_data(campaign: str, days_back: int, app_tokens_raw: st
 
 
 @st.cache_data(ttl=5 * 60, show_spinner="Đang lấy dữ liệu theo giờ hôm nay...")
-def load_hourly_data(app_tokens_raw: str, api_token: str):
+def load_hourly_data(app_tokens_raw: str, api_token: str, ad_spend_mode: str = "network"):
     """Dùng cho "Cảnh báo trong ngày" — kéo dimension "hour" của HÔM NAY (xem
     intraday_alerts.py). TTL ngắn hơn các loader khác (5 phút thay vì 15) vì
     mục đích của trang này là bắt biến động NHANH trong ngày, cần dữ liệu tươi
-    hơn."""
+    hơn. ad_spend_mode: "network" (mặc định, chính xác nhưng Meta chỉ pull 1
+    lần/ngày) hoặc "adjust" (gần thời gian thực hơn nhưng có thể thiếu sót —
+    xem docstring adjust_client.fetch_hourly_today()). LÀ THAM SỐ HÀM (không
+    đọc ngầm) để cache tự làm mới đúng khi user đổi lựa chọn."""
     if not api_token or not app_tokens_raw:
         return None, "Thiếu API Token / App Token."
     app_tokens = ac.parse_app_tokens(app_tokens_raw)
     try:
-        data = ac.fetch_hourly_today(api_token, app_tokens, exit_on_error=False)
+        data = ac.fetch_hourly_today(api_token, app_tokens, ad_spend_mode=ad_spend_mode, exit_on_error=False)
     except Exception as e:  # noqa: BLE001
         return None, f"Lỗi gọi Adjust API: {e}"
     warning_msg = ac.extract_warnings(data)
@@ -670,6 +673,25 @@ def page_alerts():
         help="Campaign có ít install hơn mức này sẽ bị bỏ qua — quá ít dữ liệu "
         "dễ báo động giả (VD 1-2 install cũng đủ làm số nhảy vọt vô nghĩa).",
     )
+    # THÊM 23/09/2026 — sau khi xác nhận "network" (mặc định) chỉ pull chi phí
+    # Facebook 1 LẦN/NGÀY (xem GHI_CHU_TIEN_DO.md): thử "adjust"/Attribution —
+    # gắn chi phí NGAY lúc install/click xảy ra, gần thời gian thực hơn hẳn,
+    # NHƯNG là giá trị TĨNH (không tự cập nhật lại khi network đổi giá thầu) →
+    # có thể THIẾU chi phí thật. Để user TỰ THỬ + tự đối chiếu (mục "🔍 Đối
+    # chiếu" bên dưới), không ép buộc — mặc định vẫn giữ "network" (chính xác).
+    al_spend_mode_label = st.radio(
+        "Nguồn dữ liệu chi phí (cho phần Cảnh báo trong ngày)",
+        options=["Network (mặc định — chính xác, có thể đứng yên cả ngày)",
+                 "Adjust/Attribution (gần thời gian thực hơn — có thể THIẾU sót)"],
+        key="al_spend_mode_label", horizontal=False,
+        help="Network: Adjust tự đi lấy lại chi phí từ Facebook, chỉ 1 lần/ngày "
+        "— chính xác nhưng đứng yên cả ngày. Adjust/Attribution: chi phí được "
+        "gắn ngay lúc có install/click, cập nhật liên tục trong ngày — nhưng là "
+        "số CỐ ĐỊNH lúc đó, không tự sửa lại nếu network đổi giá thầu sau, nên "
+        "có thể thấp hơn số thật. Thử đổi qua Adjust/Attribution rồi so với "
+        "\"🔍 Đối chiếu\" bên dưới để xem có đáng tin hơn không.",
+    )
+    al_spend_mode = "adjust" if al_spend_mode_label.startswith("Adjust/Attribution") else "network"
 
     if "al_raw_df" not in st.session_state:
         st.session_state.al_raw_df = None
@@ -701,12 +723,15 @@ def page_alerts():
             st.session_state.al_product_used = al_product_id
             st.session_state.al_days_back_used = al_days_back
 
-        hourly_df, hourly_err = load_hourly_data(al_app_tokens_raw, al_api_token)
+        hourly_df, hourly_err = load_hourly_data(al_app_tokens_raw, al_api_token, ad_spend_mode=al_spend_mode)
         st.session_state.al_hourly_df = hourly_df
         st.session_state.al_hourly_err = hourly_err
+        st.session_state.al_spend_mode_used = al_spend_mode
 
         # Kéo kèm bản "theo ngày" (cách tính CŨ, đã tin dùng từ đầu) để ĐỐI
-        # CHIẾU CHÉO — xem khối "🔍 Đối chiếu" bên dưới.
+        # CHIẾU CHÉO — xem khối "🔍 Đối chiếu" bên dưới. LUÔN dùng "network"
+        # (mặc định) cho bản đối chiếu này dù trên đang thử mode nào — vì mục
+        # đích của bản này là làm "đối chứng cố định", đổi theo sẽ mất tác dụng.
         daily_today_df, daily_today_err = load_daily_today_data(al_app_tokens_raw, al_api_token)
         st.session_state.al_daily_today_df = daily_today_df
         st.session_state.al_daily_today_err = daily_today_err
@@ -844,14 +869,24 @@ def page_alerts():
         )
 
         with st.expander("🔍 Đối chiếu: chi phí cộng dồn theo GIỜ có khớp tổng theo NGÀY không?"):
-            st.caption(
-                "So tổng chi phí hôm nay TÍNH RA từ dữ liệu theo giờ (cách MỚI, "
-                "dùng cho bảng ở trên) với tổng chi phí hôm nay lấy TRỰC TIẾP theo "
-                "ngày (cách CŨ, đã dùng cho trang Adjust từ đầu dự án). Nếu 2 cột "
-                "KHÁC NHAU → có lỗi ở cách kéo/cộng dồn theo giờ, cần báo lại để "
-                "sửa. Nếu KHỚP NHAU → chi phí đứng yên nhiều tiếng là DỮ LIỆU THẬT "
-                "từ Adjust (network chưa báo cáo thêm), không phải lỗi công cụ."
-            )
+            if al_spend_mode == "adjust":
+                st.warning(
+                    "⚠️ Bạn đang dùng nguồn \"Adjust/Attribution\" cho bảng ở trên — "
+                    "khối đối chiếu này LUÔN so với cách tính \"network\" (mặc định), "
+                    "nên 2 cột **CÓ THỂ LỆCH NHAU LÀ BÌNH THƯỜNG** (2 nguồn chi phí "
+                    "khác nhau CỐ Ý, không phải bug). Đây là lúc bạn tự xem chênh "
+                    "lệch bao nhiêu — nếu Adjust/Attribution ra số THẤP HƠN nhiều so "
+                    "với network, đúng như tài liệu Adjust cảnh báo (có thể thiếu sót)."
+                )
+            else:
+                st.caption(
+                    "So tổng chi phí hôm nay TÍNH RA từ dữ liệu theo giờ (cách MỚI, "
+                    "dùng cho bảng ở trên) với tổng chi phí hôm nay lấy TRỰC TIẾP theo "
+                    "ngày (cách CŨ, đã dùng cho trang Adjust từ đầu dự án). Nếu 2 cột "
+                    "KHÁC NHAU → có lỗi ở cách kéo/cộng dồn theo giờ, cần báo lại để "
+                    "sửa. Nếu KHỚP NHAU → chi phí đứng yên nhiều tiếng là DỮ LIỆU THẬT "
+                    "từ Adjust (network chưa báo cáo thêm), không phải lỗi công cụ."
+                )
             if st.session_state.al_daily_today_err:
                 st.error(f"❌ {st.session_state.al_daily_today_err}")
             else:

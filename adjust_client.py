@@ -178,6 +178,26 @@ def fetch_creative_summary(api_token: str, app_tokens: list, days_back: int = DA
     return call_adjust(api_token, app_tokens, CREATIVE_DIMENSIONS, days_back, **kw)
 
 
+# THÊM 22/09/2026 — THAY THẾ HẲN cơ chế "chụp snapshot" cũ (campaign_snapshots.py
+# + background_capture.py, đã xóa): đã kiểm chứng bằng số thật (app AAP874, hôm
+# qua), cộng dồn 24 dòng theo dimension "hour" = 47 installs, KHỚP 100% với tổng
+# theo "app,day" cũng ra 47 — nghĩa là Adjust TỰ LƯU SẴN lịch sử theo giờ, hỏi
+# lúc nào cũng ra đúng số "tính đến giờ X" (bằng cách tự cộng dồn), KHÔNG cần ai
+# mở app đúng lúc để ghi lại số như cơ chế snapshot cũ nữa.
+DETAIL_DIMENSIONS_HOURLY = "app,hour,campaign"
+
+
+def fetch_hourly_today(api_token: str, app_tokens: list, **kw) -> dict:
+    """Kéo dữ liệu THEO GIỜ của HÔM NAY. Mỗi dòng trả về là số PHÁT SINH TRONG
+    giờ đó (KHÔNG PHẢI cộng dồn) — muốn biết "tính đến giờ X" phải tự cộng dồn
+    (xem intraday_alerts.build_cumulative_by_hour()). Luôn ép days_back=1 +
+    include_today=True vì mục đích DUY NHẤT là xem trong ngày hôm nay."""
+    return call_adjust(
+        api_token, app_tokens, DETAIL_DIMENSIONS_HOURLY, days_back=1,
+        include_today=True, **kw
+    )
+
+
 def fetch_campaign_country_summary(
     api_token: str, app_tokens: list, campaign: str, days_back: int = DAYS_BACK_DEFAULT, **kw
 ) -> dict:

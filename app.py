@@ -18,16 +18,20 @@ từ đầu) — đủ để tự tính CPM/CTR/CVR, và PL2 vốn đã dùng th
 chỉ mất cách nhìn theo campaign_id/channel của riêng BigQuery. Xem
 GHI_CHU_TIEN_DO.md mục "Bỏ BigQuery" để biết chi tiết.
 
+⚠️ ĐÃ BỎ HẲN cơ chế "chụp snapshot" (22/09/2026, thay bằng dimension "hour"
+của Adjust) — xem `intraday_alerts.py` để biết chi tiết + lý do đổi. Không còn
+`campaign_snapshots.py`/`background_capture.py`, không còn tiến trình chạy
+ngầm, không còn token dùng chung — mỗi lần bấm Apply gọi thẳng Adjust là đủ
+dữ liệu để so bất kỳ mốc giờ nào trong ngày.
+
 Giờ CHỈ CÒN 3 trang, TẤT CẢ đều 100% dữ liệu Adjust (không phân nhóm/danh mục
 nữa vì không còn nguồn nào khác để tách):
-- "Adjust": installs, CPI, ad revenue, ROAS D0/D7/D30, retention D1/D7, ARPU +
-  "Theo dõi trong ngày" (so các mốc giờ trong ngày, dùng `campaign_snapshots.py`).
+- "Adjust": installs, CPI, ad revenue, ROAS D0/D7/D30, retention D1/D7, ARPU.
 - "Cảnh báo": CHỈ CÒN phần "Trong ngày (thời gian thực)" (đã bỏ hẳn mục "xu
   hướng nhiều ngày" 22/09/2026 theo yêu cầu user: "tạm thời chỉ muốn build
   theo hướng realtime" — file `campaign_alerts.py` không còn dùng, đã xóa) —
-  so với các mốc 1/2/3 tiếng trước (không phải chỉ "lần đầu hôm nay" — đổi
-  21/09/2026 vì rủi ro "lần đầu" có thể đã là buổi chiều nếu sáng không ai mở
-  app), dùng `campaign_snapshots.py` (chia sẻ kho snapshot với trang Adjust).
+  so với các mốc 1/2/3 tiếng trước, dùng `intraday_alerts.py` (kéo trực tiếp
+  dimension "hour" của Adjust, không cần chụp/lưu trữ gì).
 - "Xét nghiệm" (đổi tên từ "Chẩn đoán" 22/09/2026, tên cũ "Campaign Doctor"):
   chọn 1 campaign đang bị cảnh báo (đọc từ trang Cảnh báo) → tầng 1 (CPI đắt/
   User kém, so benchmark tự nhập) → tầng 2 (CPM/CTR/CVR so peer NẾU CPI đắt —
@@ -51,10 +55,9 @@ import streamlit as st
 from dotenv import load_dotenv
 
 import adjust_client as ac
-import background_capture as bgcap
 import benchmarks as bm
 import campaign_doctor as cdoc
-import campaign_snapshots as csnap
+import intraday_alerts as ia
 from streamlit_local_storage import LocalStorage
 
 load_dotenv()  # đọc .env khi chạy local — dùng cho GOOGLE_APPLICATION_CREDENTIALS
@@ -202,29 +205,6 @@ with st.sidebar:
         if local_storage.getItem("adjust_app_tokens"):
             local_storage.deleteItem("adjust_app_tokens", key="del_adjust_app_tokens")
 
-    st.divider()
-    # KHÔNG cần tick riêng nữa (đổi 22/09/2026 theo yêu cầu user — mặc định AI
-    # CŨNG CẦN việc chụp ngầm nên bỏ hẳn bước phải tự chọn): hễ đã nhập ĐỦ API
-    # Token + App Token ở trên, tự động góp luôn vào danh sách chụp ngầm —
-    # KHÔNG âm thầm giấu (vẫn hiện rõ đang xảy ra chuyện gì, chỉ là không cần
-    # thao tác thêm). Vẫn phải GÓP THEO DANH SÁCH (không phải 1 token duy
-    # nhất) vì mỗi người chỉ xem được 1 vài app riêng — xem background_capture.py.
-    _cur_api = st.session_state.get("adjust_api_token")
-    _cur_apps = st.session_state.get("adjust_app_tokens")
-    if _cur_api and _cur_apps:
-        bgcap.add_or_update_shared_token(_cur_api, _cur_apps)
-        _shared_count = bgcap.count_shared_tokens()
-        st.caption(
-            f"☁️ Token này cũng tự động dùng để chụp snapshot ngầm mỗi 1 tiếng "
-            f"(kể cả khi không ai mở app) — hiện có {_shared_count} token đang góp."
-        )
-
-
-# Khởi động luồng chụp ngầm — CHỈ 1 lần cho CẢ TIẾN TRÌNH (không phải mỗi
-# session), tự no-op nếu đã chạy rồi. Xem background_capture.py để biết giới
-# hạn thật (không phải cron 24/7, chỉ chạy khi tiến trình Streamlit còn sống).
-bgcap.ensure_background_thread_started()
-
 
 # ══════════════════════════════════════════════════════════════════════
 # Adjust — hàm dùng chung
@@ -319,6 +299,26 @@ def load_campaign_country_data(campaign: str, days_back: int, app_tokens_raw: st
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
     return df, None, warning_msg
+
+
+@st.cache_data(ttl=5 * 60, show_spinner="Đang lấy dữ liệu theo giờ hôm nay...")
+def load_hourly_data(app_tokens_raw: str, api_token: str):
+    """Dùng cho "Cảnh báo trong ngày" — kéo dimension "hour" của HÔM NAY (xem
+    intraday_alerts.py). TTL ngắn hơn các loader khác (5 phút thay vì 15) vì
+    mục đích của trang này là bắt biến động NHANH trong ngày, cần dữ liệu tươi
+    hơn."""
+    if not api_token or not app_tokens_raw:
+        return None, "Thiếu API Token / App Token."
+    app_tokens = ac.parse_app_tokens(app_tokens_raw)
+    try:
+        data = ac.fetch_hourly_today(api_token, app_tokens, exit_on_error=False)
+    except Exception as e:  # noqa: BLE001
+        return None, f"Lỗi gọi Adjust API: {e}"
+    warning_msg = ac.extract_warnings(data)
+    rows = data.get("rows") or []
+    if not rows:
+        return pd.DataFrame(), warning_msg
+    return pd.DataFrame(rows), warning_msg
 
 
 def weighted_kpis(df: pd.DataFrame) -> dict:
@@ -488,86 +488,11 @@ def page_adjust():
             row3[1].metric("Retention D7", fmt_percent(kpis.get("retention_rate_d7")))
 
             if st.session_state.adjust_include_today:
-                st.divider()
-                st.subheader("Theo dõi trong ngày (sáng vs hiện tại)")
-                st.caption(
-                    "Tự động lưu lại CPI/ROAS D0/ARPU D0 mỗi lần bạn xem \"Hôm nay\" (cách "
-                    f"nhau tối thiểu {csnap.MIN_INTERVAL_HOURS} tiếng) — để so sánh sau này "
-                    "không cần nhớ số buổi sáng. ⚠️ Có thể mất nếu app ngủ/redeploy giữa các lần xem."
+                st.info(
+                    "📍 Muốn xem CPI/ROAS/LTV biến động THẾ NÀO trong ngày hôm nay (so "
+                    "với 1/2/3 tiếng trước)? Qua trang **Cảnh báo** — đã có sẵn tính năng "
+                    "này, dùng chung dữ liệu Adjust, không cần fetch lại ở đây."
                 )
-                force_capture = st.checkbox(
-                    "🔄 Chụp ngay, bỏ qua giới hạn 1 tiếng",
-                    key="adjust_force_capture",
-                    help="Tick nếu muốn Apply lần này LUÔN chụp thêm 1 mốc mới ngay — "
-                    "dùng khi đang test hoặc cần xem gấp, không đợi đủ giờ.",
-                )
-                # QUAN TRỌNG: chỉ force ở ĐÚNG lần rerun do bấm Apply gây ra (fetch_clicked)
-                # — đoạn chụp snapshot này nằm NGOÀI khối "if fetch_clicked" (chạy lại mỗi
-                # khi đổi bộ lọc quốc gia/app để cập nhật KPI), nên nếu không chặn thêm điều
-                # kiện này, để tick sẵn sẽ chụp tràn lan mỗi lần đổi bộ lọc, không phải chỉ
-                # khi bấm Apply (đã phát hiện lúc code, chưa kịp xảy ra thật).
-                effective_force = force_capture and fetch_clicked
-
-                snapshot_rows = 0
-                for app_name, g_app in filtered.groupby("app"):
-                    campaign_stats = {}
-                    for campaign_name, g in g_app.groupby("campaign"):
-                        k = weighted_kpis(g)
-                        campaign_stats[campaign_name] = {
-                            "installs": k["installs"],
-                            "cpi": k["cpi"],
-                            "roas_d0": k.get("roas_ad_d0"),
-                            "arpu_d0": k.get("arpu_d0"),
-                        }
-                    # Bọc lỗi — chụp snapshot là tính năng PHỤ, không được làm
-                    # sập cả trang Adjust nếu có gì bất thường.
-                    try:
-                        snapshot_rows += csnap.maybe_capture_snapshots(app_name, campaign_stats, force=effective_force)
-                    except Exception as e:  # noqa: BLE001
-                        st.warning(f"⚠️ Không chụp được snapshot cho {app_name}: {e}")
-                if snapshot_rows:
-                    st.caption(f"📸 Vừa chụp thêm {snapshot_rows} campaign mới.")
-
-                compare_rows = []
-                for app_name, g_app in filtered.groupby("app"):
-                    for campaign_name in g_app["campaign"].unique():
-                        cmp = csnap.compare_today(app_name, campaign_name)
-                        if cmp:
-                            compare_rows.append({
-                                "Campaign": campaign_name,
-                                "Lần đầu hôm nay": cmp["first_ts"][11:16],
-                                "Lần gần nhất": cmp["last_ts"][11:16],
-                                "CPI đầu": cmp["first"].get("cpi"),
-                                "CPI hiện tại": cmp["last"].get("cpi"),
-                                "CPI % đổi": cmp["cpi_pct_change"],
-                                "ROAS D0 đầu": cmp["first"].get("roas_d0"),
-                                "ROAS D0 hiện tại": cmp["last"].get("roas_d0"),
-                                "ROAS D0 % đổi": cmp["roas_d0_pct_change"],
-                                "ARPU D0 đầu": cmp["first"].get("arpu_d0"),
-                                "ARPU D0 hiện tại": cmp["last"].get("arpu_d0"),
-                            })
-
-                if not compare_rows:
-                    st.info(
-                        "Chưa đủ 2 lần chụp trong hôm nay để so sánh — quay lại xem sau "
-                        f"(cách lần trước ≥{csnap.MIN_INTERVAL_HOURS} tiếng) để thấy bảng so sánh."
-                    )
-                else:
-                    compare_df = pd.DataFrame(compare_rows).sort_values("ROAS D0 % đổi").reset_index(drop=True)
-                    st.dataframe(
-                        compare_df, width="stretch", hide_index=True,
-                        column_config={
-                            "CPI đầu": st.column_config.NumberColumn(format="$%.4f"),
-                            "CPI hiện tại": st.column_config.NumberColumn(format="$%.4f"),
-                            "CPI % đổi": st.column_config.NumberColumn(format="%.1f%%"),
-                            "ROAS D0 đầu": st.column_config.NumberColumn(format="percent"),
-                            "ROAS D0 hiện tại": st.column_config.NumberColumn(format="percent"),
-                            "ROAS D0 % đổi": st.column_config.NumberColumn(format="%.1f%%"),
-                            "ARPU D0 đầu": st.column_config.NumberColumn(format="$%.4f"),
-                            "ARPU D0 hiện tại": st.column_config.NumberColumn(format="$%.4f"),
-                        },
-                    )
-                    st.caption("ROAS D0 tụt nhiều nhất (so với lần chụp đầu hôm nay) lên đầu.")
 
             st.subheader("Xu hướng theo ngày")
             trend = (
@@ -716,17 +641,7 @@ def page_alerts():
             list(AL_DATE_PRESETS.keys()), index=2, key="al_date",
         )
         al_days_back = AL_DATE_PRESETS[al_date_choice]
-    fcol_apply, fcol_force = st.columns([1, 3])
-    with fcol_apply:
-        al_fetch_clicked = st.button("Apply", type="primary", key="al_fetch")
-    with fcol_force:
-        al_force_capture = st.checkbox(
-            "🔄 Chụp ngay, bỏ qua giới hạn 1 tiếng",
-            key="al_force_capture",
-            help=f"Bình thường phải cách lần chụp trước ≥{csnap.MIN_INTERVAL_HOURS} tiếng mới "
-            "chụp thêm — tick ô này nếu muốn Apply lần này LUÔN chụp thêm 1 mốc mới "
-            "ngay, dùng khi đang test đổi ngưỡng liên tục hoặc cần xem gấp.",
-        )
+    al_fetch_clicked = st.button("Apply", type="primary", key="al_fetch")
 
     al_min_installs = st.number_input(
         "Install tối thiểu để tính vào cảnh báo",
@@ -741,14 +656,16 @@ def page_alerts():
         st.session_state.al_days_back_used = None
         st.session_state.al_err = None
         st.session_state.al_warning = None
+        st.session_state.al_hourly_df = None
+        st.session_state.al_hourly_err = None
 
     if al_fetch_clicked:
-        # LUÔN kéo kèm "hôm nay" (include_today=True) — để CHỤP SNAPSHOT trong
-        # ngày (xem campaign_snapshots.py) phục vụ mục cảnh báo realtime bên
-        # dưới. Phần ngày đã chốt (historical_df) vẫn giữ lại cho trang "Xét
-        # nghiệm" dùng (tầng 1/tầng 2 so benchmark + peer average).
+        # Phần ngày ĐÃ CHỐT (không lấy hôm nay) — dùng cho trang "Xét nghiệm"
+        # (tầng 1/tầng 2 so benchmark + peer average). Phần "trong ngày" giờ
+        # kéo RIÊNG bằng dimension "hour" (xem intraday_alerts.py — thay thế
+        # hẳn cơ chế "chụp snapshot" cũ, KHÔNG cần lưu trữ/chạy ngầm gì nữa).
         adjust_df, adjust_err, adjust_warning = load_adjust_data(
-            al_days_back, al_app_tokens_raw, al_api_token, include_today=True, include_country=False
+            al_days_back, al_app_tokens_raw, al_api_token, include_today=False, include_country=False
         )
         st.session_state.al_warning = adjust_warning
         if adjust_err:
@@ -756,44 +673,13 @@ def page_alerts():
             st.session_state.al_raw_df = None
         else:
             st.session_state.al_err = None
-            today_str = csnap.today_str_vn()
-            # Tách "hôm nay" (chưa chốt, dùng để chụp snapshot realtime) khỏi
-            # phần ngày đã chốt (historical_df — lưu cho trang "Xét nghiệm" dùng
-            # riêng, KHÔNG liên quan phần cảnh báo realtime ở trang này nữa).
-            historical_df = adjust_df[adjust_df["day"] != today_str] if adjust_df is not None and not adjust_df.empty else adjust_df
-            today_df = adjust_df[adjust_df["day"] == today_str] if adjust_df is not None and not adjust_df.empty else adjust_df
-
-            # Lưu lại df thô (KHÔNG còn cột "country", đã bỏ để nhanh hơn, xem
-            # include_country ở load_adjust_data()) + product_id/khoảng ngày
-            # đang dùng — trang "Xét nghiệm" tái sử dụng cho tầng 1 + peer
-            # average, KHÔNG gọi lại Adjust API. Riêng phần "cắt lát theo quốc
-            # gia" ở Xét nghiệm phải kéo RIÊNG (fetch_campaign_country_summary,
-            # lọc đúng 1 campaign) vì raw_df này không còn country.
-            st.session_state.al_raw_df = historical_df
+            st.session_state.al_raw_df = adjust_df
             st.session_state.al_product_used = al_product_id
             st.session_state.al_days_back_used = al_days_back
 
-            # Chụp snapshot TỪ DÒNG HÔM NAY — dùng field "app" THẬT của Adjust
-            # làm namespace (giống trang Adjust) để "Cảnh báo trong ngày" và
-            # "Theo dõi trong ngày" (trang Adjust) CHIA SẺ cùng 1 kho snapshot.
-            if today_df is not None and not today_df.empty:
-                for app_name, g_app in today_df.groupby("app"):
-                    campaign_stats = {}
-                    for campaign_name, g in g_app.groupby("campaign"):
-                        k = weighted_kpis(g)
-                        campaign_stats[campaign_name] = {
-                            "installs": k["installs"],
-                            "cpi": k["cpi"],
-                            "roas_d0": k.get("roas_ad_d0"),
-                            "arpu_d0": k.get("arpu_d0"),
-                        }
-                    # Bọc lỗi — chụp snapshot chỉ là tính năng PHỤ (thời gian
-                    # thực), lỗi ở đây (VD dữ liệu snapshot cũ bị hỏng) không
-                    # được phép làm sập cả trang Cảnh báo.
-                    try:
-                        csnap.maybe_capture_snapshots(app_name, campaign_stats, force=al_force_capture)
-                    except Exception as e:  # noqa: BLE001
-                        st.warning(f"⚠️ Không chụp được snapshot cho {app_name}: {e}")
+        hourly_df, hourly_err = load_hourly_data(al_app_tokens_raw, al_api_token)
+        st.session_state.al_hourly_df = hourly_df
+        st.session_state.al_hourly_err = hourly_err
 
     if st.session_state.al_err:
         st.error(f"❌ {st.session_state.al_err}")
@@ -804,49 +690,45 @@ def page_alerts():
         st.info("👆 Chọn app + khoảng ngày, nhập token Adjust rồi bấm **Apply** để bắt đầu.")
         return
 
-    # Dùng snapshot đã chụp ở app này lẫn ở trang Adjust (chia sẻ chung kho
-    # snapshot theo field "app" Adjust) — nếu chưa ai chụp lần 2 hôm nay (cách
-    # nhau ≥1 tiếng) thì chưa có gì để so.
-    if st.session_state.al_raw_df is not None and not st.session_state.al_raw_df.empty:
-        apps_in_scope = st.session_state.al_raw_df["app"].dropna().unique().tolist()
-    else:
-        apps_in_scope = []
-    # Adjust "app" field không nhất thiết có mặt trong historical_df nếu hôm nay
-    # là ngày DUY NHẤT có data — lấy trực tiếp từ app_tokens đã lọc thay vì chỉ
-    # dựa vào historical_df để không bỏ sót.
+    if st.session_state.al_hourly_err:
+        st.error(f"❌ Không lấy được dữ liệu theo giờ: {st.session_state.al_hourly_err}")
+
     st.subheader("⚡ Cảnh báo trong ngày (thời gian thực)")
     st.caption(
-        "So với các mốc ~1/2/3 tiếng trước (tự động chọn snapshot gần mốc đó "
-        "nhất) — tự động chụp mỗi khi ai đó xem trang này hoặc trang Adjust với "
-        f"\"Hôm nay\" (cách nhau ≥{csnap.MIN_INTERVAL_HOURS} tiếng). Theo dõi CẢ 3: "
-        "CPI (chi phí), LTV/ARPU D0 (giá trị user), ROAS D0 (= LTV ÷ CPI) — để "
-        "biết ROAS biến động là do chi phí đắt lên hay do giá trị user tụt xuống."
+        "So với các mốc ~1/2/3 tiếng trước — lấy TRỰC TIẾP lịch sử theo GIỜ từ "
+        "Adjust (không cần ai mở app đúng lúc để \"chụp\" số như trước, luôn có "
+        "dữ liệu ngay khi bấm Apply). Theo dõi CẢ 3: CPI (chi phí), LTV/ARPU D0 "
+        "(giá trị user), ROAS D0 (= LTV ÷ CPI) — để biết ROAS biến động là do chi "
+        "phí đắt lên hay do giá trị user tụt xuống."
     )
     al_realtime_pct = st.number_input(
         "Mức thay đổi cần báo động (%)",
         min_value=5, value=20, step=5, key="al_realtime_pct",
-        help="So với lần xem đầu tiên hôm nay (thường là buổi sáng) — VD CPI "
-        "tăng vọt hoặc LTV tụt quá mức này so với sáng nay sẽ hiện ở bảng dưới đây.",
+        help="So với các mốc 1/2/3 tiếng trước — VD CPI tăng vọt hoặc LTV tụt "
+        "quá mức này sẽ hiện ở bảng dưới đây.",
     )
 
-    scope_apps = apps_in_scope or [a for a in csnap.load_snapshot_app_keys() if a.startswith(al_product_id)]
+    hourly_df = st.session_state.al_hourly_df
+    if hourly_df is None or hourly_df.empty:
+        st.info("Chưa có dữ liệu theo giờ hôm nay cho token này — bấm Apply để tải.")
+        st.session_state.al_realtime_flagged = []
+        return
 
-    all_flagged_today = []
-    for app_name in scope_apps:
-        all_flagged_today.extend(
-            csnap.list_flagged_hours_ago(
-                app_name, threshold_pct=float(al_realtime_pct), min_installs=int(al_min_installs)
-            )
-        )
-    # Lưu lại để trang "Xét nghiệm" đọc danh sách campaign đang bị cảnh báo
-    # (đã đổi nguồn từ "xu hướng nhiều ngày" đã bỏ sang danh sách realtime này).
+    cum_df = ia.build_cumulative_by_hour(hourly_df)
+    # Chỉ xét app đang chọn (product_id) — field "app" thật của Adjust có dạng
+    # "AAP874-Face Warp Prank", product_id là phần trước dấu "-".
+    cum_df_scope = cum_df[cum_df["app"].str.startswith(al_product_id)]
+
+    all_flagged_today = ia.list_flagged_hours_ago(
+        cum_df_scope, threshold_pct=float(al_realtime_pct), min_installs=int(al_min_installs)
+    )
+    # Lưu lại để trang "Xét nghiệm" đọc danh sách campaign đang bị cảnh báo.
     st.session_state.al_realtime_flagged = all_flagged_today
 
     if not all_flagged_today:
         st.info(
-            "Chưa đủ 2 lần chụp trong hôm nay để so sánh, hoặc chưa campaign nào "
-            "vượt ngưỡng — quay lại xem sau (cách lần chụp trước ≥"
-            f"{csnap.MIN_INTERVAL_HOURS} tiếng)."
+            "Chưa campaign nào vượt ngưỡng trong 1/2/3 tiếng qua, hoặc app này "
+            "chưa có đủ 2 giờ dữ liệu hôm nay (VD vừa qua nửa đêm)."
         )
     else:
         realtime_rows = []
@@ -878,34 +760,29 @@ def page_alerts():
         )
         st.caption(
             "Mỗi campaign hiện mốc so sánh cho thấy vấn đề RÕ NHẤT (trong số "
-            "1/2/3 tiếng trước, tự động chọn snapshot gần mốc đó nhất — không "
-            "chính xác tuyệt đối vì chỉ chụp được khi có người mở app)."
+            "1/2/3 tiếng trước, tự động chọn giờ gần mốc đó nhất)."
         )
 
-    with st.expander("Xem thêm: so với lần đầu tiên xem hôm nay (VD sáng nay, nếu có ai mở từ sáng)"):
-        all_flagged_since_first = []
-        for app_name in scope_apps:
-            all_flagged_since_first.extend(
-                csnap.list_flagged_today(
-                    app_name, threshold_pct=float(al_realtime_pct), min_installs=int(al_min_installs)
-                )
-            )
-        if not all_flagged_since_first:
-            st.caption("Chưa có gì vượt ngưỡng so với lần đầu tiên xem hôm nay.")
+    with st.expander("Xem thêm: so với đầu ngày hôm nay (0h)"):
+        all_flagged_since_start = ia.list_flagged_since_day_start(
+            cum_df_scope, threshold_pct=float(al_realtime_pct), min_installs=int(al_min_installs)
+        )
+        if not all_flagged_since_start:
+            st.caption("Chưa có gì vượt ngưỡng so với đầu ngày hôm nay.")
         else:
-            since_first_rows = [
+            since_start_rows = [
                 {
                     "Campaign": f["campaign"],
-                    "Lần đầu hôm nay": f["first_ts"][11:16],
-                    "Bây giờ": f["last_ts"][11:16],
+                    "Đầu ngày": f["baseline_ts"][11:16],
+                    "Bây giờ": f["latest_ts"][11:16],
                     "CPI % đổi": f["cpi_pct_change"],
                     "LTV (ARPU D0) % đổi": f["arpu_d0_pct_change"],
                     "ROAS D0 % đổi": f["roas_d0_pct_change"],
                 }
-                for f in all_flagged_since_first
+                for f in all_flagged_since_start
             ]
             st.dataframe(
-                pd.DataFrame(since_first_rows), width="stretch", hide_index=True,
+                pd.DataFrame(since_start_rows), width="stretch", hide_index=True,
                 column_config={
                     "CPI % đổi": st.column_config.NumberColumn(format="%.1f%%"),
                     "LTV (ARPU D0) % đổi": st.column_config.NumberColumn(format="%.1f%%"),
@@ -928,7 +805,7 @@ def page_campaign_doctor():
 
     # Nguồn danh sách campaign đang bị cảnh báo: ĐỔI sang danh sách REALTIME
     # (22/09/2026, sau khi bỏ "xu hướng nhiều ngày" khỏi trang Cảnh báo) — xem
-    # `al_realtime_flagged` (list dict từ csnap.list_flagged_hours_ago()), lưu
+    # `al_realtime_flagged` (list dict từ ia.list_flagged_hours_ago()), lưu
     # bởi page_alerts().
     if st.session_state.get("al_realtime_flagged") is None or st.session_state.get("al_raw_df") is None:
         st.info(

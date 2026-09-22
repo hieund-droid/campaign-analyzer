@@ -43,7 +43,13 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 
 VN_TZ = timezone(timedelta(hours=7))
-DEFAULT_HOURS_AGO = (1, 2, 3)
+# THÊM mốc 6 tiếng (23/09/2026) — đã xác nhận bằng đối chiếu chéo với user
+# thật: Adjust chỉ lấy chi phí quảng cáo từ network ~6 lần/ngày (trung bình
+# ~4 tiếng/lần), nên so ở mốc 1/2/3 tiếng RẤT HAY rơi vào giữa 2 lần cập nhật
+# (chi phí đứng yên, xem docstring _flag_entry()). Giữ 1/2/3 để vẫn bắt được
+# biến động nhanh khi CÓ chi phí mới, thêm 6 để tăng khả năng bắt được ít
+# nhất 1 mốc có chi phí đã thật sự cập nhật.
+DEFAULT_HOURS_AGO = (1, 2, 3, 6)
 
 
 def _pct(a, b):
@@ -146,9 +152,18 @@ def _flag_entry(app: str, campaign: str, cmp: dict, threshold_pct: float, min_in
     arpu_bad = cmp["arpu_d0_pct_change"] is not None and cmp["arpu_d0_pct_change"] <= -threshold_pct
     if not (cpi_bad or roas_bad or arpu_bad):
         return None
+    # ĐÃ KIỂM CHỨNG bằng đối chiếu chéo với user thật (23/09/2026): khi chi phí
+    # (cost_cum) KHÔNG đổi giữa 2 mốc, CPI/ARPU đổi chỉ do installs bị pha
+    # loãng — KHÔNG phải campaign đổi chất lượng thật. Đánh dấu rõ để ưu tiên
+    # chọn mốc có chi phí ĐÃ cập nhật khi có nhiều mốc cùng vượt ngưỡng (xem
+    # list_flagged_hours_ago()).
+    cost_b = cmp["baseline"].get("cost_cum") or 0
+    cost_l = cmp["latest"].get("cost_cum") or 0
+    cost_changed = abs(cost_b - cost_l) >= 0.01
     return {
         "app": app, "campaign": campaign, "target": target_label,
         "cpi_bad": cpi_bad, "roas_bad": roas_bad, "arpu_bad": arpu_bad,
+        "cost_changed": cost_changed,
         **cmp,
     }
 
@@ -159,25 +174,28 @@ def list_flagged_hours_ago(
     threshold_pct: float = 20.0,
     min_installs: int = 0,
 ) -> list:
-    """CẢNH BÁO TRONG NGÀY — kiểm tra CẢ 3 mốc 1/2/3 tiếng trước (mặc định),
+    """CẢNH BÁO TRONG NGÀY — kiểm tra các mốc 1/2/3/6 tiếng trước (mặc định),
     gắn cờ nếu BẤT KỲ mốc nào cho thấy CPI TĂNG hoặc ROAS D0/ARPU D0 GIẢM vượt
-    threshold_pct%. Mỗi campaign chỉ trả về 1 dòng — chọn mốc có ROAS D0 giảm
-    NHIỀU NHẤT (nghi phạm rõ nhất) trong số các mốc đã vượt ngưỡng."""
+    threshold_pct%. Mỗi campaign chỉ trả về 1 dòng — ƯU TIÊN mốc có chi phí ĐÃ
+    THẬT SỰ cập nhật (cost_changed=True, đáng tin hơn — xem _flag_entry()),
+    trong số đó chọn ROAS D0 giảm NHIỀU NHẤT; nếu KHÔNG mốc nào có chi phí
+    cập nhật, đành chọn mốc ROAS giảm nhiều nhất trong số còn lại (vẫn hiện,
+    có nhãn cảnh báo riêng ở UI)."""
     if cum_df is None or cum_df.empty:
         return []
     flagged = []
     for (app, campaign), _ in cum_df.groupby(["app", "campaign"]):
-        worst = None
+        candidates = []
         for h in hours_ago_list:
             entry = _flag_entry(app, campaign, compare_hours_ago(cum_df, app, campaign, h), threshold_pct, min_installs, h)
-            if entry is None:
-                continue
-            worst_roas = worst.get("roas_d0_pct_change") if worst else None
-            entry_roas = entry.get("roas_d0_pct_change")
-            if worst is None or (entry_roas is not None and (worst_roas is None or entry_roas < worst_roas)):
-                worst = entry
-        if worst:
-            flagged.append(worst)
+            if entry is not None:
+                candidates.append(entry)
+        if not candidates:
+            continue
+        cost_changed_candidates = [e for e in candidates if e["cost_changed"]]
+        pool = cost_changed_candidates or candidates
+        worst = min(pool, key=lambda e: e.get("roas_d0_pct_change") if e.get("roas_d0_pct_change") is not None else 0)
+        flagged.append(worst)
     return sorted(flagged, key=lambda f: f.get("roas_d0_pct_change") or 0)
 
 

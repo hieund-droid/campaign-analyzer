@@ -681,6 +681,7 @@ def page_alerts():
         st.session_state.al_hourly_err = None
         st.session_state.al_daily_today_df = None
         st.session_state.al_daily_today_err = None
+        st.session_state.al_campaign_channel_map = {}
 
     if al_fetch_clicked:
         # Phần ngày ĐÃ CHỐT (không lấy hôm nay) — dùng cho trang "Xét nghiệm"
@@ -709,6 +710,19 @@ def page_alerts():
         daily_today_df, daily_today_err = load_daily_today_data(al_app_tokens_raw, al_api_token)
         st.session_state.al_daily_today_df = daily_today_df
         st.session_state.al_daily_today_err = daily_today_err
+
+        # Bản đồ campaign → network (channel) — để user tự biết campaign đang
+        # bị "đứng chi phí" có phải Meta/Facebook không, TRƯỚC KHI cân nhắc nối
+        # thẳng Meta Marketing API (chỉ đáng làm nếu ĐA SỐ campaign là Meta).
+        try:
+            app_tokens_list = ac.parse_app_tokens(al_app_tokens_raw)
+            channel_data = ac.fetch_campaign_channel_map(al_api_token, app_tokens_list, exit_on_error=False)
+            channel_rows = channel_data.get("rows") or []
+            st.session_state.al_campaign_channel_map = {
+                r.get("campaign"): r.get("channel") for r in channel_rows if r.get("campaign")
+            }
+        except Exception:  # noqa: BLE001 — chỉ là thông tin phụ, không được chặn cả trang
+            st.session_state.al_campaign_channel_map = {}
 
     if st.session_state.al_err:
         st.error(f"❌ {st.session_state.al_err}")
@@ -775,20 +789,20 @@ def page_alerts():
         # KHỚP tổng theo ngày (cách tính cũ, đã tin dùng) — xác nhận đây là dữ
         # liệu THẬT từ Adjust (network chưa báo cáo thêm), không phải bug.
         b, l = f["baseline"], f["latest"]
-        cost_b, cost_l = b.get("cost_cum") or 0, l.get("cost_cum") or 0
-        cost_unchanged = abs(cost_b - cost_l) < 0.01
         return {
             "Installs lúc đó": b.get("installs_cum"),
             "Installs bây giờ": l.get("installs_cum"),
-            "Chi phí lúc đó": cost_b,
-            "Chi phí bây giờ": cost_l,
-            "Chi phí đã cập nhật?": "⚠️ CHƯA (network chưa báo cáo)" if cost_unchanged else "✅ Có",
+            "Chi phí lúc đó": b.get("cost_cum") or 0,
+            "Chi phí bây giờ": l.get("cost_cum") or 0,
+            "Chi phí đã cập nhật?": "✅ Có" if f.get("cost_changed") else "⚠️ CHƯA (network chưa báo cáo)",
         }
 
     _diag_col_config = {
         "Chi phí lúc đó": st.column_config.NumberColumn(format="$%.2f"),
         "Chi phí bây giờ": st.column_config.NumberColumn(format="$%.2f"),
     }
+
+    _channel_map = st.session_state.get("al_campaign_channel_map", {})
 
     if not all_flagged_today:
         st.info(
@@ -799,6 +813,7 @@ def page_alerts():
         realtime_rows = [
             {
                 "Campaign": f["campaign"],
+                "Nguồn": _channel_map.get(f["campaign"], "?"),
                 "So với ~mấy tiếng trước": f"{f['actual_hours_gap']:.1f}h",
                 "Lúc đó": f["baseline_ts"][11:16],
                 "Bây giờ": f["latest_ts"][11:16],
@@ -892,6 +907,7 @@ def page_alerts():
         since_hour_rows = [
             {
                 "Campaign": f["campaign"],
+                "Nguồn": _channel_map.get(f["campaign"], "?"),
                 f"Lúc ~{int(al_since_hour):02d}h": f["baseline_ts"][11:16],
                 "Bây giờ": f["latest_ts"][11:16],
                 "CPI % đổi": f["cpi_pct_change"],

@@ -81,11 +81,30 @@ def load_snapshot_app_keys() -> list:
     return list(load_snapshots().keys())
 
 
+def _valid_snapshot(s) -> bool:
+    """Lọc snapshot HỎNG/lạ (VD dict thiếu "ts", hoặc "ts" không phải string
+    hợp lệ) — phòng dữ liệu cũ/ghi đè lỗi giữa chừng (2 người dùng cùng lúc
+    trên Streamlit Cloud) làm crash cả trang thay vì chỉ bỏ qua 1 dòng lỗi."""
+    if not isinstance(s, dict):
+        return False
+    ts = s.get("ts")
+    if not isinstance(ts, str):
+        return False
+    try:
+        datetime.fromisoformat(ts)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
 def get_campaign_snapshots(app_key: str, campaign: str) -> list:
     """Trả về TOÀN BỘ snapshot đã lưu của 1 campaign (mọi ngày), sắp theo thời
-    gian tăng dần."""
+    gian tăng dần. Tự lọc bỏ snapshot hỏng (xem _valid_snapshot())."""
     campaigns = load_snapshots().get(app_key, {})
-    return sorted(campaigns.get(campaign, []), key=lambda s: s["ts"])
+    raw = campaigns.get(campaign, [])
+    if not isinstance(raw, list):
+        return []
+    return sorted((s for s in raw if _valid_snapshot(s)), key=lambda s: s["ts"])
 
 
 def get_today_snapshots(app_key: str, campaign: str) -> list:
@@ -108,11 +127,19 @@ def _to_native(v):
     return float(v)
 
 
-def maybe_capture_snapshots(app_key: str, campaign_stats: dict, min_interval_hours: float = MIN_INTERVAL_HOURS) -> int:
+def maybe_capture_snapshots(
+    app_key: str, campaign_stats: dict, min_interval_hours: float = MIN_INTERVAL_HOURS, force: bool = False
+) -> int:
     """campaign_stats: {campaign_name: {"installs":, "cpi":, "roas_d0":, "arpu_d0":}}
     — chụp lại CHỈ những campaign đã cách lần chụp gần nhất (hôm nay) đủ
     `min_interval_hours` tiếng, hoặc chưa từng chụp hôm nay. Bỏ qua campaign có
-    installs=0 (chưa có gì để chụp). Trả về SỐ campaign vừa được chụp mới."""
+    installs=0 (chưa có gì để chụp). Trả về SỐ campaign vừa được chụp mới.
+
+    force=True: BỎ QUA giới hạn `min_interval_hours`, luôn chụp thêm 1 snapshot
+    mới — dùng khi user chủ động bấm "Chụp ngay" (VD đang test đổi ngưỡng liên
+    tục trong lúc dùng thử, không muốn đợi đủ giờ mới thấy kết quả mới; hoặc
+    thật sự cần xem NGAY, không đợi được). Mặc định False (giữ giới hạn, tránh
+    kho dữ liệu phình to vô ích nếu ai đó bấm Apply liên tục)."""
     if not campaign_stats:
         return 0
 
@@ -125,11 +152,26 @@ def maybe_capture_snapshots(app_key: str, campaign_stats: dict, min_interval_hou
     for campaign, stats in campaign_stats.items():
         if not stats.get("installs"):
             continue
-        history = product_snaps.setdefault(campaign, [])
-        today_snaps = [s for s in history if s["ts"].startswith(now.strftime("%Y-%m-%d"))]
-        if today_snaps:
-            last_ts = max(datetime.fromisoformat(s["ts"]) for s in today_snaps)
-            if now - last_ts < timedelta(hours=min_interval_hours):
+        # product_snaps[campaign] LẼ RA luôn là list — nhưng phòng dữ liệu cũ/hỏng
+        # (VD JSON bị ghi đè lỗi giữa chừng do 2 người dùng cùng lúc trên Streamlit
+        # Cloud) khiến giá trị không phải list, dùng lại làm history sẽ crash toàn
+        # trang — coi như "chưa có gì" (mất lịch sử cũ của riêng campaign này) thay
+        # vì crash, an toàn hơn nhiều so với để cả trang lỗi.
+        existing = product_snaps.get(campaign)
+        history = existing if isinstance(existing, list) else []
+        product_snaps[campaign] = history
+
+        today_snaps = [s for s in history if isinstance(s, dict) and isinstance(s.get("ts"), str) and s["ts"].startswith(now.strftime("%Y-%m-%d"))]
+        if today_snaps and not force:
+            try:
+                last_ts = max(datetime.fromisoformat(s["ts"]) for s in today_snaps)
+                is_recent = (now - last_ts) < timedelta(hours=min_interval_hours)
+            except (TypeError, ValueError):
+                # "ts" hỏng/định dạng lạ (VD lệch tz-aware vs naive) — KHÔNG rõ có
+                # phải "vừa chụp gần đây" hay không → coi như chưa chụp gần đây,
+                # vẫn cho chụp thêm (an toàn hơn crash cả trang vì 1 dòng dữ liệu lỗi).
+                is_recent = False
+            if is_recent:
                 continue
         history.append(
             {

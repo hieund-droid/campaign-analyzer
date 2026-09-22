@@ -495,7 +495,12 @@ def page_adjust():
                             "roas_d0": k.get("roas_ad_d0"),
                             "arpu_d0": k.get("arpu_d0"),
                         }
-                    snapshot_rows += csnap.maybe_capture_snapshots(app_name, campaign_stats, force=effective_force)
+                    # Bọc lỗi — chụp snapshot là tính năng PHỤ, không được làm
+                    # sập cả trang Adjust nếu có gì bất thường.
+                    try:
+                        snapshot_rows += csnap.maybe_capture_snapshots(app_name, campaign_stats, force=effective_force)
+                    except Exception as e:  # noqa: BLE001
+                        st.warning(f"⚠️ Không chụp được snapshot cho {app_name}: {e}")
                 if snapshot_rows:
                     st.caption(f"📸 Vừa chụp thêm {snapshot_rows} campaign mới.")
 
@@ -758,7 +763,13 @@ def page_alerts():
                             "roas_d0": k.get("roas_ad_d0"),
                             "arpu_d0": k.get("arpu_d0"),
                         }
-                    csnap.maybe_capture_snapshots(app_name, campaign_stats, force=al_force_capture)
+                    # Bọc lỗi — chụp snapshot chỉ là tính năng PHỤ (thời gian
+                    # thực), lỗi ở đây (VD dữ liệu snapshot cũ bị hỏng) không
+                    # được phép làm sập cả trang Cảnh báo.
+                    try:
+                        csnap.maybe_capture_snapshots(app_name, campaign_stats, force=al_force_capture)
+                    except Exception as e:  # noqa: BLE001
+                        st.warning(f"⚠️ Không chụp được snapshot cho {app_name}: {e}")
 
     if st.session_state.al_err:
         st.error(f"❌ {st.session_state.al_err}")

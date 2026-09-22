@@ -725,22 +725,44 @@ def page_alerts():
     # Lưu lại để trang "Xét nghiệm" đọc danh sách campaign đang bị cảnh báo.
     st.session_state.al_realtime_flagged = all_flagged_today
 
+    def _flags_str(f: dict) -> str:
+        flags = []
+        if f["cpi_bad"]:
+            flags.append("🔴 CPI tăng")
+        if f["roas_bad"]:
+            flags.append("🔴 ROAS D0 giảm")
+        if f["arpu_bad"]:
+            flags.append("🔴 LTV (ARPU D0) giảm")
+        return " · ".join(flags)
+
+    def _diag_cols(f: dict) -> dict:
+        # Cột "chẩn đoán" — cho thấy RÕ vì sao CPI/LTV có thể đổi % GIỐNG HỆT
+        # nhau trong khi ROAS D0 đứng yên (KHÔNG phải bug — vì ROAS_D0 =
+        # LTV÷CPI luôn đúng về mặt toán, xem docstring intraday_alerts.py):
+        # nếu "Chi phí lúc đó" ≈ "Chi phí bây giờ" (chưa đổi) trong khi
+        # installs tăng, đó là do network CHƯA KỊP báo cáo chi phí mới, không
+        # phải campaign đổi chất lượng thật.
+        b, l = f["baseline"], f["latest"]
+        return {
+            "Installs lúc đó": b.get("installs_cum"),
+            "Installs bây giờ": l.get("installs_cum"),
+            "Chi phí lúc đó": b.get("cost_cum"),
+            "Chi phí bây giờ": l.get("cost_cum"),
+        }
+
+    _diag_col_config = {
+        "Chi phí lúc đó": st.column_config.NumberColumn(format="$%.2f"),
+        "Chi phí bây giờ": st.column_config.NumberColumn(format="$%.2f"),
+    }
+
     if not all_flagged_today:
         st.info(
             "Chưa campaign nào vượt ngưỡng trong 1/2/3 tiếng qua, hoặc app này "
             "chưa có đủ 2 giờ dữ liệu hôm nay (VD vừa qua nửa đêm)."
         )
     else:
-        realtime_rows = []
-        for f in all_flagged_today:
-            flags = []
-            if f["cpi_bad"]:
-                flags.append("🔴 CPI tăng")
-            if f["roas_bad"]:
-                flags.append("🔴 ROAS D0 giảm")
-            if f["arpu_bad"]:
-                flags.append("🔴 LTV (ARPU D0) giảm")
-            realtime_rows.append({
+        realtime_rows = [
+            {
                 "Campaign": f["campaign"],
                 "So với ~mấy tiếng trước": f"{f['actual_hours_gap']:.1f}h",
                 "Lúc đó": f["baseline_ts"][11:16],
@@ -748,47 +770,71 @@ def page_alerts():
                 "CPI % đổi": f["cpi_pct_change"],
                 "LTV (ARPU D0) % đổi": f["arpu_d0_pct_change"],
                 "ROAS D0 % đổi": f["roas_d0_pct_change"],
-                "Cảnh báo": " · ".join(flags),
-            })
+                **_diag_cols(f),
+                "Cảnh báo": _flags_str(f),
+            }
+            for f in all_flagged_today
+        ]
         st.dataframe(
             pd.DataFrame(realtime_rows), width="stretch", hide_index=True,
             column_config={
                 "CPI % đổi": st.column_config.NumberColumn(format="%.1f%%"),
                 "LTV (ARPU D0) % đổi": st.column_config.NumberColumn(format="%.1f%%"),
                 "ROAS D0 % đổi": st.column_config.NumberColumn(format="%.1f%%"),
+                **_diag_col_config,
             },
         )
         st.caption(
             "Mỗi campaign hiện mốc so sánh cho thấy vấn đề RÕ NHẤT (trong số "
-            "1/2/3 tiếng trước, tự động chọn giờ gần mốc đó nhất)."
+            "1/2/3 tiếng trước, tự động chọn giờ gần mốc đó nhất). Cột "
+            "\"Installs\"/\"Chi phí\" 2 mốc để TỰ KIỂM TRA: nếu chi phí gần "
+            "như không đổi trong khi installs tăng, ROAS D0 đứng yên (0.0%) "
+            "là ĐÚNG về mặt tính toán (ROAS = LTV ÷ CPI) — nhiều khả năng do "
+            "network chưa kịp báo cáo chi phí mới, không phải chất lượng "
+            "campaign đổi thật."
         )
 
-    with st.expander("Xem thêm: so với đầu ngày hôm nay (0h)"):
-        all_flagged_since_start = ia.list_flagged_since_day_start(
-            cum_df_scope, threshold_pct=float(al_realtime_pct), min_installs=int(al_min_installs)
+    st.divider()
+    since_col1, since_col2 = st.columns([1, 3])
+    with since_col1:
+        al_since_hour = st.number_input(
+            "So với giờ nào hôm nay?", min_value=0, max_value=23, value=8, step=1,
+            key="al_since_hour",
+            help="VD 8 = so với ~8h sáng hôm nay. Mặc định 0h (nửa đêm) không "
+            "hữu ích vì gần như chưa có hoạt động gì để so sánh.",
         )
-        if not all_flagged_since_start:
-            st.caption("Chưa có gì vượt ngưỡng so với đầu ngày hôm nay.")
-        else:
-            since_start_rows = [
-                {
-                    "Campaign": f["campaign"],
-                    "Đầu ngày": f["baseline_ts"][11:16],
-                    "Bây giờ": f["latest_ts"][11:16],
-                    "CPI % đổi": f["cpi_pct_change"],
-                    "LTV (ARPU D0) % đổi": f["arpu_d0_pct_change"],
-                    "ROAS D0 % đổi": f["roas_d0_pct_change"],
-                }
-                for f in all_flagged_since_start
-            ]
-            st.dataframe(
-                pd.DataFrame(since_start_rows), width="stretch", hide_index=True,
-                column_config={
-                    "CPI % đổi": st.column_config.NumberColumn(format="%.1f%%"),
-                    "LTV (ARPU D0) % đổi": st.column_config.NumberColumn(format="%.1f%%"),
-                    "ROAS D0 % đổi": st.column_config.NumberColumn(format="%.1f%%"),
-                },
-            )
+    with since_col2:
+        st.write("")
+        st.caption(f"Xem thêm: so với ~{int(al_since_hour):02d}h00 hôm nay (tự chọn giờ ở ô bên trái).")
+
+    all_flagged_since_hour = ia.list_flagged_since_hour(
+        cum_df_scope, baseline_hour_of_day=int(al_since_hour),
+        threshold_pct=float(al_realtime_pct), min_installs=int(al_min_installs),
+    )
+    if not all_flagged_since_hour:
+        st.caption(f"Chưa có gì vượt ngưỡng so với ~{int(al_since_hour):02d}h00 hôm nay.")
+    else:
+        since_hour_rows = [
+            {
+                "Campaign": f["campaign"],
+                f"Lúc ~{int(al_since_hour):02d}h": f["baseline_ts"][11:16],
+                "Bây giờ": f["latest_ts"][11:16],
+                "CPI % đổi": f["cpi_pct_change"],
+                "LTV (ARPU D0) % đổi": f["arpu_d0_pct_change"],
+                "ROAS D0 % đổi": f["roas_d0_pct_change"],
+                **_diag_cols(f),
+            }
+            for f in all_flagged_since_hour
+        ]
+        st.dataframe(
+            pd.DataFrame(since_hour_rows), width="stretch", hide_index=True,
+            column_config={
+                "CPI % đổi": st.column_config.NumberColumn(format="%.1f%%"),
+                "LTV (ARPU D0) % đổi": st.column_config.NumberColumn(format="%.1f%%"),
+                "ROAS D0 % đổi": st.column_config.NumberColumn(format="%.1f%%"),
+                **_diag_col_config,
+            },
+        )
 
 
 

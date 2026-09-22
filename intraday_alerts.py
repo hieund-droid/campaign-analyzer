@@ -1,6 +1,7 @@
 """
-So sánh CPI/ROAS D0/LTV (ARPU D0) "bây giờ" vs "N tiếng trước" NGAY TRONG NGÀY
-— kéo TRỰC TIẾP dimension "hour" của Adjust (adjust_client.fetch_hourly_today).
+So sánh CPI/ROAS D0/LTV (ARPU D0) "bây giờ" vs "N tiếng trước" (hoặc 1 giờ cụ
+thể trong ngày, VD 8h) NGAY TRONG NGÀY — kéo TRỰC TIẾP dimension "hour" của
+Adjust (adjust_client.fetch_hourly_today).
 
 THAY THẾ HẲN (22/09/2026) cơ chế "chụp snapshot" cũ (`campaign_snapshots.py` +
 `background_capture.py`, đã xóa): cơ chế cũ chỉ ghi được số tại những THỜI ĐIỂM
@@ -18,6 +19,20 @@ CÁCH TÍNH: mỗi dòng Adjust trả về (dimension "hour") là số PHÁT SIN
 campaign) rồi tính lại CPI/ROAS D0/ARPU D0 từ số ĐÃ CỘNG DỒN (đúng cách — KHÔNG
 lấy trung bình cộng cột tỉ lệ qua nhiều giờ, xem RATIO_COLS ở adjust_client.py
 để biết vì sao sai).
+
+⚠️ QUAN TRỌNG — vì sao CPI % đổi và LTV (ARPU D0) % đổi CÓ THỂ giống hệt nhau
+trong khi ROAS D0 % đổi = 0.0% (user hỏi 23/09/2026, tưởng là bug — ĐÃ KIỂM
+CHỨNG bằng đại số, KHÔNG phải bug): vì ROAS_D0 = ARPU_D0 ÷ CPI LUÔN LUÔN đúng
+(cả 2 cùng chia cho installs, installs bị triệt tiêu khi lấy tỉ số) — nên hễ
+ROAS_D0 không đổi, % đổi của CPI và ARPU_D0 BẮT BUỘC phải bằng nhau, đây là hệ
+quả TOÁN HỌC, không phải trùng hợp hay lỗi tính. Nguyên nhân THỰC TẾ hay gặp
+nhất khiến ROAS đứng yên trong khi CPI/ARPU cùng đổi: chi phí (network_cost)
+và doanh thu D0 giữa 2 mốc KHÔNG ĐỔI (network network chưa kịp báo cáo chi phí
+mới — chi phí ads thường có ĐỘ TRỄ báo cáo vài tiếng so với installs, vốn gần
+như tức thời), trong khi installs vẫn tăng — CPI/ARPU (chia cho installs) đều
+giảm cùng tỉ lệ, còn ROAS (= doanh thu ÷ chi phí, KHÔNG phụ thuộc installs) thì
+đứng yên. `list_flagged_hours_ago()`/`list_flagged_since_hour()` trả kèm
+installs/chi phí thô ở 2 mốc (baseline/latest) để tự kiểm tra giả thuyết này.
 
 ⚠️ Số của giờ HIỆN TẠI vẫn đang chạy (chưa hết giờ) — coi là "tạm thời", sẽ còn
 tăng đến hết giờ đó, giống bản chất số "hôm nay" nói chung.
@@ -41,7 +56,12 @@ def build_cumulative_by_hour(hourly_df: pd.DataFrame) -> pd.DataFrame:
     """Input: df thô từ adjust_client.fetch_hourly_today() (cột app, hour,
     campaign, installs, network_cost, roas_ad_d0, ...). Output: thêm các cột
     CỘNG DỒN từ đầu ngày đến hết mỗi giờ: installs_cum, cost_cum,
-    revenue_d0_cum, cpi, roas_d0, arpu_d0 (suy ra từ số ĐÃ cộng dồn)."""
+    revenue_d0_cum, cpi, roas_d0, arpu_d0 (suy ra từ số ĐÃ cộng dồn).
+
+    Trả về NGUYÊN VẸN nếu df rỗng (VD vừa qua nửa đêm, chưa có install nào
+    hôm nay) — tránh KeyError do df rỗng không có cột nào để đọc."""
+    if hourly_df is None or hourly_df.empty:
+        return hourly_df
     df = hourly_df.copy()
     for col in ("installs", "network_cost", "roas_ad_d0"):
         if col in df.columns:
@@ -58,12 +78,10 @@ def build_cumulative_by_hour(hourly_df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def compare_hours_ago(cum_df: pd.DataFrame, app: str, campaign: str, hours_ago: float) -> dict | None:
-    """So giờ MỚI NHẤT (đang chạy) với giờ GẦN mốc `hours_ago` tiếng trước
-    nhất (trong số các giờ đã có dữ liệu hôm nay cho campaign này). Trả về
-    None nếu campaign chưa có nổi 2 giờ dữ liệu khác nhau (VD vừa qua nửa
-    đêm). `hours_ago` lớn hơn số giờ đã qua trong ngày (VD 24) sẽ tự động lấy
-    giờ SỚM NHẤT có dữ liệu làm gốc — dùng để so "từ đầu ngày đến giờ"."""
+def _compare_to_target(cum_df: pd.DataFrame, app: str, campaign: str, target_dt: datetime) -> dict | None:
+    """Lõi dùng chung: so giờ MỚI NHẤT (đang chạy) với giờ đã có dữ liệu GẦN
+    `target_dt` nhất. Trả về None nếu campaign chưa có nổi 2 giờ dữ liệu khác
+    nhau hôm nay (VD vừa qua nửa đêm)."""
     g = cum_df[(cum_df["app"] == app) & (cum_df["campaign"] == campaign)]
     hours_sorted = sorted(g["hour"].unique())
     if len(hours_sorted) < 2:
@@ -72,7 +90,6 @@ def compare_hours_ago(cum_df: pd.DataFrame, app: str, campaign: str, hours_ago: 
     latest_hour = hours_sorted[-1]
     latest = g[g["hour"] == latest_hour].iloc[0]
     latest_dt = datetime.fromisoformat(latest_hour)
-    target_dt = latest_dt - timedelta(hours=hours_ago)
 
     earlier_hours = hours_sorted[:-1]
     baseline_hour = min(earlier_hours, key=lambda h: abs((datetime.fromisoformat(h) - target_dt).total_seconds()))
@@ -88,6 +105,51 @@ def compare_hours_ago(cum_df: pd.DataFrame, app: str, campaign: str, hours_ago: 
         "cpi_pct_change": _pct(baseline["cpi"], latest["cpi"]),
         "roas_d0_pct_change": _pct(baseline["roas_d0"], latest["roas_d0"]),
         "arpu_d0_pct_change": _pct(baseline["arpu_d0"], latest["arpu_d0"]),
+    }
+
+
+def compare_hours_ago(cum_df: pd.DataFrame, app: str, campaign: str, hours_ago: float) -> dict | None:
+    """So giờ MỚI NHẤT với giờ GẦN mốc `hours_ago` tiếng TRƯỚC GIỜ MỚI NHẤT
+    (không phải trước giờ hiện tại thực — nếu dữ liệu mới nhất đã trễ vài
+    phút, mốc vẫn tính từ đó) nhất trong số các giờ đã có dữ liệu hôm nay."""
+    g = cum_df[(cum_df["app"] == app) & (cum_df["campaign"] == campaign)]
+    hours_sorted = sorted(g["hour"].unique())
+    if not hours_sorted:
+        return None
+    latest_dt = datetime.fromisoformat(hours_sorted[-1])
+    target_dt = latest_dt - timedelta(hours=hours_ago)
+    return _compare_to_target(cum_df, app, campaign, target_dt)
+
+
+def compare_since_hour(cum_df: pd.DataFrame, app: str, campaign: str, baseline_hour_of_day: int) -> dict | None:
+    """So giờ MỚI NHẤT với 1 GIỜ CỤ THỂ trong ngày hôm nay (VD baseline_hour_of_day=8
+    → so với ~8h sáng) — THAY THẾ mốc cố định "0h" (nửa đêm gần như không có
+    hoạt động, so với nó ra % đổi cực đoan vô nghĩa, user phản ánh 23/09/2026).
+    Tự chọn giờ ĐÃ CÓ DỮ LIỆU gần `baseline_hour_of_day` nhất (không nhất thiết
+    đúng tuyệt đối vì Adjust có thể thiếu 1 vài giờ)."""
+    g = cum_df[(cum_df["app"] == app) & (cum_df["campaign"] == campaign)]
+    hours_sorted = sorted(g["hour"].unique())
+    if not hours_sorted:
+        return None
+    latest_dt = datetime.fromisoformat(hours_sorted[-1])
+    target_dt = latest_dt.replace(hour=int(baseline_hour_of_day), minute=0, second=0, microsecond=0)
+    return _compare_to_target(cum_df, app, campaign, target_dt)
+
+
+def _flag_entry(app: str, campaign: str, cmp: dict, threshold_pct: float, min_installs: int, target_label) -> dict | None:
+    if cmp is None:
+        return None
+    if min_installs and (cmp["latest"].get("installs_cum") or 0) < min_installs:
+        return None
+    cpi_bad = cmp["cpi_pct_change"] is not None and cmp["cpi_pct_change"] >= threshold_pct
+    roas_bad = cmp["roas_d0_pct_change"] is not None and cmp["roas_d0_pct_change"] <= -threshold_pct
+    arpu_bad = cmp["arpu_d0_pct_change"] is not None and cmp["arpu_d0_pct_change"] <= -threshold_pct
+    if not (cpi_bad or roas_bad or arpu_bad):
+        return None
+    return {
+        "app": app, "campaign": campaign, "target": target_label,
+        "cpi_bad": cpi_bad, "roas_bad": roas_bad, "arpu_bad": arpu_bad,
+        **cmp,
     }
 
 
@@ -107,21 +169,9 @@ def list_flagged_hours_ago(
     for (app, campaign), _ in cum_df.groupby(["app", "campaign"]):
         worst = None
         for h in hours_ago_list:
-            cmp = compare_hours_ago(cum_df, app, campaign, h)
-            if not cmp:
+            entry = _flag_entry(app, campaign, compare_hours_ago(cum_df, app, campaign, h), threshold_pct, min_installs, h)
+            if entry is None:
                 continue
-            if min_installs and (cmp["latest"].get("installs_cum") or 0) < min_installs:
-                continue
-            cpi_bad = cmp["cpi_pct_change"] is not None and cmp["cpi_pct_change"] >= threshold_pct
-            roas_bad = cmp["roas_d0_pct_change"] is not None and cmp["roas_d0_pct_change"] <= -threshold_pct
-            arpu_bad = cmp["arpu_d0_pct_change"] is not None and cmp["arpu_d0_pct_change"] <= -threshold_pct
-            if not (cpi_bad or roas_bad or arpu_bad):
-                continue
-            entry = {
-                "app": app, "campaign": campaign, "hours_ago_target": h,
-                "cpi_bad": cpi_bad, "roas_bad": roas_bad, "arpu_bad": arpu_bad,
-                **cmp,
-            }
             worst_roas = worst.get("roas_d0_pct_change") if worst else None
             entry_roas = entry.get("roas_d0_pct_change")
             if worst is None or (entry_roas is not None and (worst_roas is None or entry_roas < worst_roas)):
@@ -131,9 +181,21 @@ def list_flagged_hours_ago(
     return sorted(flagged, key=lambda f: f.get("roas_d0_pct_change") or 0)
 
 
-def list_flagged_since_day_start(cum_df: pd.DataFrame, threshold_pct: float = 20.0, min_installs: int = 0) -> list:
-    """So với giờ SỚM NHẤT có dữ liệu hôm nay (thường = 0h) — thay thế
-    `list_flagged_today` cũ (so với "lần đầu ai đó mở app hôm nay", vốn phụ
-    thuộc may rủi). Dùng hours_ago=24 (lớn hơn mọi khoảng cách có thể có trong
-    ngày) để compare_hours_ago tự chọn giờ sớm nhất làm gốc — xem docstring đó."""
-    return list_flagged_hours_ago(cum_df, hours_ago_list=(24,), threshold_pct=threshold_pct, min_installs=min_installs)
+def list_flagged_since_hour(
+    cum_df: pd.DataFrame,
+    baseline_hour_of_day: int = 8,
+    threshold_pct: float = 20.0,
+    min_installs: int = 0,
+) -> list:
+    """So với 1 GIỜ CỤ THỂ user tự chọn trong ngày (mặc định 8h) — THAY THẾ
+    `list_flagged_since_day_start()` cũ (cố định 0h, không hữu ích vì nửa đêm
+    gần như không có hoạt động — user phản ánh 23/09/2026)."""
+    if cum_df is None or cum_df.empty:
+        return []
+    flagged = []
+    for (app, campaign), _ in cum_df.groupby(["app", "campaign"]):
+        cmp = compare_since_hour(cum_df, app, campaign, baseline_hour_of_day)
+        entry = _flag_entry(app, campaign, cmp, threshold_pct, min_installs, baseline_hour_of_day)
+        if entry:
+            flagged.append(entry)
+    return sorted(flagged, key=lambda f: f.get("roas_d0_pct_change") or 0)

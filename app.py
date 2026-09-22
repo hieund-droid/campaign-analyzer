@@ -207,18 +207,24 @@ with st.sidebar:
 # Adjust — hàm dùng chung
 # ══════════════════════════════════════════════════════════════════════
 @st.cache_data(ttl=15 * 60, show_spinner="Đang lấy dữ liệu từ Adjust...")
-def load_adjust_data(days_back: int, app_tokens_raw: str, api_token: str, include_today: bool = False):
+def load_adjust_data(
+    days_back: int, app_tokens_raw: str, api_token: str, include_today: bool = False, include_country: bool = True
+):
     # QUAN TRỌNG: api_token + app_tokens_raw PHẢI là tham số của hàm (không đọc
     # secret/session ngầm bên trong) — Streamlit chỉ cache dựa theo tham số truyền
     # vào. Nếu đọc ngầm bên trong hàm, đổi giá trị sẽ KHÔNG làm cache cũ mất hiệu
     # lực (đã gặp lỗi thật: thêm app thứ 2 vẫn chỉ thấy app cũ).
+    # include_country=False (trang Cảnh báo, 22/09/2026 — sửa timeout): bỏ cột
+    # "country" khỏi truy vấn giảm ~65% thời gian, ~93% số dòng (đã đo thật) —
+    # Cảnh báo không cần grain quốc gia (build_campaign_daily gộp campaign+day).
     if not api_token or not app_tokens_raw:
         return None, "Thiếu API Token / App Token.", None
 
     app_tokens = ac.parse_app_tokens(app_tokens_raw)
     try:
         data = ac.fetch_detail(
-            api_token, app_tokens, days_back=days_back, exit_on_error=False, include_today=include_today
+            api_token, app_tokens, days_back=days_back, exit_on_error=False,
+            include_today=include_today, include_country=include_country,
         )
     except Exception as e:  # noqa: BLE001
         return None, f"Lỗi gọi Adjust API: {e}", None
@@ -247,6 +253,36 @@ def load_creative_data(days_back: int, app_tokens_raw: str, api_token: str):
     app_tokens = ac.parse_app_tokens(app_tokens_raw)
     try:
         data = ac.fetch_creative_summary(api_token, app_tokens, days_back=days_back, exit_on_error=False)
+    except Exception as e:  # noqa: BLE001
+        return None, f"Lỗi gọi Adjust API: {e}", None
+
+    warning_msg = ac.extract_warnings(data)
+    rows = data.get("rows") or []
+    if not rows:
+        return pd.DataFrame(), None, warning_msg
+
+    df = pd.DataFrame(rows)
+    for col in ac.SUMMABLE_COLS + ac.RATIO_COLS:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df, None, warning_msg
+
+
+@st.cache_data(ttl=15 * 60, show_spinner="Đang lấy dữ liệu theo quốc gia...")
+def load_campaign_country_data(campaign: str, days_back: int, app_tokens_raw: str, api_token: str):
+    """Dùng cho trang Xét nghiệm — cắt lát theo quốc gia CHỈ cho 1 campaign
+    (22/09/2026 — trang Cảnh báo đã bỏ cột "country" khỏi truy vấn chính để
+    nhanh hơn, nên không còn raw_df có country để tái dùng; kéo riêng, lọc
+    server-side bằng campaign__in, nhẹ hơn nhiều so với kéo hết rồi tự lọc —
+    xem adjust_client.fetch_campaign_country_summary())."""
+    if not api_token or not app_tokens_raw:
+        return None, "Thiếu API Token / App Token.", None
+
+    app_tokens = ac.parse_app_tokens(app_tokens_raw)
+    try:
+        data = ac.fetch_campaign_country_summary(
+            api_token, app_tokens, campaign, days_back=days_back, exit_on_error=False
+        )
     except Exception as e:  # noqa: BLE001
         return None, f"Lỗi gọi Adjust API: {e}", None
 
@@ -688,7 +724,7 @@ def page_alerts():
         # user phản ánh (16/09/2026): chọn 30 ngày không giúp biết CPI/ROAS D0
         # thay đổi NGAY TRONG NGÀY (VD sáng rẻ, chiều tăng vọt) để action kịp.
         adjust_df, adjust_err, adjust_warning = load_adjust_data(
-            al_days_back, al_app_tokens_raw, al_api_token, include_today=True
+            al_days_back, al_app_tokens_raw, al_api_token, include_today=True, include_country=False
         )
         st.session_state.al_warning = adjust_warning
         if adjust_err:
@@ -704,9 +740,13 @@ def page_alerts():
             today_df = adjust_df[adjust_df["day"] == today_str] if adjust_df is not None and not adjust_df.empty else adjust_df
 
             st.session_state.al_daily_df = calerts.build_campaign_daily(historical_df, al_product_id)
-            # Lưu lại df thô (chưa gộp, còn đủ country/retention_rate_d1) + product_id/
-            # khoảng ngày đang dùng — trang "Xét nghiệm" tái sử dụng, KHÔNG gọi lại
-            # Adjust API và query BigQuery ĐÚNG CÙNG khoảng ngày này.
+            # Lưu lại df thô (chưa gộp theo campaign+day, còn đủ retention_rate_d1
+            # — KHÔNG còn cột "country" nữa, đã bỏ để nhanh hơn, xem include_country
+            # ở load_adjust_data()) + product_id/khoảng ngày đang dùng — trang
+            # "Xét nghiệm" tái sử dụng cho tầng 1 + peer average, KHÔNG gọi lại
+            # Adjust API. Riêng phần "cắt lát theo quốc gia" ở Xét nghiệm phải kéo
+            # RIÊNG (fetch_campaign_country_summary, lọc đúng 1 campaign) vì
+            # raw_df này không còn country.
             st.session_state.al_raw_df = historical_df
             st.session_state.al_product_used = al_product_id
             st.session_state.al_days_back_used = al_days_back
@@ -1115,19 +1155,44 @@ def page_campaign_doctor():
     slice_tab1, slice_tab2 = st.tabs(["Theo quốc gia", "Theo creative"])
 
     with slice_tab1:
-        country_df = cdoc.country_slice(raw_df, product_id, selected_campaign)
-        if country_df.empty:
-            st.info("Không có dữ liệu theo quốc gia cho campaign này.")
-        else:
-            st.dataframe(
-                country_df, width="stretch", hide_index=True,
-                column_config={
-                    "CPI": st.column_config.NumberColumn(format="$%.4f"),
-                    "ROAS D0": st.column_config.NumberColumn(format="percent"),
-                    "Retention D1": st.column_config.NumberColumn(format="percent"),
-                },
+        st.caption("🔒 Cần token Adjust cá nhân — nhập ở sidebar bên trái.")
+        country_fetch_clicked = st.button("Tải dữ liệu theo quốc gia", key="doc_country_fetch")
+
+        if country_fetch_clicked:
+            country_raw, country_err, country_warning = load_campaign_country_data(
+                selected_campaign,
+                days_back_used,
+                st.session_state.get("adjust_app_tokens", ""),
+                st.session_state.get("adjust_api_token", ""),
             )
-            st.caption("ROAS D0 thấp nhất lên đầu — nghi phạm chính. Đã bỏ quốc gia <5 installs (quá ít để có ý nghĩa).")
+            st.session_state.doc_country_raw = country_raw
+            st.session_state.doc_country_err = country_err
+            st.session_state.doc_country_campaign = selected_campaign
+
+        # Dữ liệu đã tải có thể là của 1 campaign KHÁC (user đổi campaign ở
+        # dropdown trên nhưng chưa bấm tải lại) — phải kiểm tra, không thì hiện
+        # nhầm dữ liệu quốc gia của campaign cũ (đã lọc sẵn theo campaign lúc
+        # fetch, không tự động cập nhật khi đổi lựa chọn).
+        country_raw = st.session_state.get("doc_country_raw")
+        stale = st.session_state.get("doc_country_campaign") != selected_campaign
+        if st.session_state.get("doc_country_err"):
+            st.error(f"❌ {st.session_state.doc_country_err}")
+        elif country_raw is None or stale:
+            st.info("👆 Bấm **Tải dữ liệu theo quốc gia** để xem quốc gia nào đang kéo campaign này xuống.")
+        else:
+            country_df = cdoc.country_slice(country_raw)
+            if country_df.empty:
+                st.warning("Không có dữ liệu theo quốc gia cho campaign này trong khoảng ngày đã kéo.")
+            else:
+                st.dataframe(
+                    country_df, width="stretch", hide_index=True,
+                    column_config={
+                        "CPI": st.column_config.NumberColumn(format="$%.4f"),
+                        "ROAS D0": st.column_config.NumberColumn(format="percent"),
+                        "Retention D1": st.column_config.NumberColumn(format="percent"),
+                    },
+                )
+                st.caption("ROAS D0 thấp nhất lên đầu — nghi phạm chính. Đã bỏ quốc gia <5 installs (quá ít để có ý nghĩa).")
 
     with slice_tab2:
         st.caption("🔒 Cần token Adjust cá nhân — nhập ở sidebar bên trái.")

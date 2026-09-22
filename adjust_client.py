@@ -16,6 +16,11 @@ ENDPOINT = "https://automate.adjust.com/reports-service/report"
 # "app" để phân biệt số liệu từng app khi kéo nhiều app; "country" để sau này
 # dựng Bảng điểm thị trường (thị trường nào tốt/xấu).
 DETAIL_DIMENSIONS = "app,day,campaign,country"
+# KHÔNG có "country" — dùng cho trang Cảnh báo (22/09/2026, sửa timeout): trang
+# đó KHÔNG cần grain quốc gia (build_campaign_daily gộp theo campaign+day, bỏ
+# country ngay từ đầu) — bỏ country khỏi truy vấn giảm 93% số dòng, 65% thời
+# gian (đã đo thật: 14 ngày app AAP874 từ 21.7s/39,856 dòng → 7.5s/2,638 dòng).
+DETAIL_DIMENSIONS_NO_COUNTRY = "app,day,campaign"
 
 # Xem GHI_CHU_TIEN_DO.md mục "Các quyết định quan trọng" để biết vì sao chọn
 # từng metric (vd: ad_revenue thay vì revenue). CPI dùng ecpi_all (= network_cost
@@ -82,6 +87,7 @@ def call_adjust(
     days_back: int = DAYS_BACK_DEFAULT,
     exit_on_error: bool = True,
     include_today: bool = False,
+    extra_params: dict | None = None,
 ) -> dict:
     """Gọi Adjust Report Service API. Trả về dict JSON đã parse.
 
@@ -89,6 +95,10 @@ def call_adjust(
     muốn thấy lỗi ngay). exit_on_error=False: raise exception thay vì thoát (dùng
     cho script chạy nền/lịch tự động, để phần gọi có thể tự xử lý/log lỗi).
     include_today: xem docstring get_date_range().
+    extra_params: filter thêm ngoài app_token__in — VD {"campaign__in": "..."}
+    để lọc SERVER-SIDE về đúng 1 campaign (đã kiểm chứng bằng số thật 22/09/2026:
+    lọc đúng, không lẫn campaign khác — dùng để kéo dữ liệu quốc gia CHỈ của 1
+    campaign đang xét ở "Xét nghiệm", nhẹ hơn nhiều so với kéo hết rồi tự lọc).
     """
     headers = {"Authorization": f"Bearer {api_token}"}
     params = {
@@ -99,6 +109,8 @@ def call_adjust(
         "ad_spend_mode": AD_SPEND_MODE,
         "utc_offset": UTC_OFFSET,
     }
+    if extra_params:
+        params.update(extra_params)
 
     # timeout 60s TỪNG GÂY LỖI THẬT (22/09/2026): app nhiều dữ liệu (VD APL567)
     # kéo detail 30 ngày (app,day,campaign,country) có thể mất >60s — đã đo
@@ -129,9 +141,17 @@ def extract_warnings(data: dict) -> str | None:
     return " | ".join(w.get("body", w.get("title", str(w))) for w in warnings)
 
 
-def fetch_detail(api_token: str, app_tokens: list, days_back: int = DAYS_BACK_DEFAULT, **kw) -> dict:
-    """Bảng chi tiết: theo app + day + campaign + country."""
-    return call_adjust(api_token, app_tokens, DETAIL_DIMENSIONS, days_back, **kw)
+def fetch_detail(
+    api_token: str, app_tokens: list, days_back: int = DAYS_BACK_DEFAULT, include_country: bool = True, **kw
+) -> dict:
+    """Bảng chi tiết: theo app + day + campaign (+ country nếu include_country=True).
+
+    include_country=False: dùng cho trang Cảnh báo (không cần grain quốc gia,
+    nhẹ hơn nhiều — xem DETAIL_DIMENSIONS_NO_COUNTRY). Trang Adjust vẫn dùng
+    include_country=True (mặc định) vì có bộ lọc + drill-down theo quốc gia.
+    """
+    dims = DETAIL_DIMENSIONS if include_country else DETAIL_DIMENSIONS_NO_COUNTRY
+    return call_adjust(api_token, app_tokens, dims, days_back, **kw)
 
 
 def fetch_app_totals(api_token: str, app_tokens: list, days_back: int = DAYS_BACK_DEFAULT, **kw) -> dict:
@@ -156,6 +176,24 @@ def fetch_creative_summary(api_token: str, app_tokens: list, days_back: int = DA
     """Tổng hợp theo creative (cho 1 hoặc nhiều campaign) — dùng để "cắt lát
     khoanh vùng" xem creative nào đang kéo campaign xuống."""
     return call_adjust(api_token, app_tokens, CREATIVE_DIMENSIONS, days_back, **kw)
+
+
+def fetch_campaign_country_summary(
+    api_token: str, app_tokens: list, campaign: str, days_back: int = DAYS_BACK_DEFAULT, **kw
+) -> dict:
+    """Tổng hợp theo QUỐC GIA cho ĐÚNG 1 campaign, gộp cả khoảng ngày (KHÔNG có
+    "day" trong dimension — để Adjust tự tính đúng CPI/ROAS D0/Retention D1 cho
+    từng quốc gia, giống cách fetch_app_totals()/fetch_creative_summary() đã
+    làm — không tự cộng dồn tay). Lọc SERVER-SIDE bằng campaign__in (đã kiểm
+    chứng đúng, xem docstring call_adjust()) — dùng cho "Xét nghiệm" cắt lát
+    theo quốc gia, thay vì phải kéo full app,day,campaign,country rồi tự lọc
+    (22/09/2026 — user báo trang Cảnh báo load chậm, đã đo: cách cũ 21.7s cho
+    39,856 dòng chỉ để dùng lại đúng 1 campaign; cách này lọc thẳng, nhẹ hơn
+    nhiều lần)."""
+    return call_adjust(
+        api_token, app_tokens, "app,campaign,country", days_back,
+        extra_params={"campaign__in": campaign}, **kw
+    )
 
 
 def list_known_app_prefixes(api_token: str, app_tokens: list, days_back: int = 7, **kw) -> list:

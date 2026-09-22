@@ -109,45 +109,45 @@ def diagnose_tier1(stats: dict, benchmark: dict, threshold_pct: float = DEFAULT_
     }
 
 
-def country_slice(raw_adjust_df: pd.DataFrame, product_id: str, campaign: str, min_installs: int = 5) -> pd.DataFrame:
+def country_slice(campaign_country_df: pd.DataFrame, min_installs: int = 5) -> pd.DataFrame:
     """Cắt lát theo quốc gia cho ĐÚNG 1 campaign — sắp ROAS D0 thấp nhất lên
     đầu (nghi phạm chính) để dễ soi.
+
+    campaign_country_df: kết quả THÔ từ adjust_client.fetch_campaign_country_summary()
+    (đã parse thành DataFrame) — ĐÃ lọc sẵn về đúng 1 campaign + tự tổng hợp
+    đúng CPI/ROAS D0/Retention D1 theo quốc gia (Adjust tự tính vì dimension
+    KHÔNG có "day" — không cần cộng dồn tay ở đây nữa, xem docstring
+    fetch_campaign_country_summary()). ĐỔI 22/09/2026: trước đây hàm này tự
+    lọc + cộng dồn từ raw_adjust_df (bảng chi tiết đầy đủ) — đổi sang nhận
+    thẳng data đã lọc sẵn server-side, vì trang Cảnh báo đã bỏ cột "country"
+    khỏi truy vấn chính (để nhanh hơn), nên không còn raw_adjust_df có country
+    để tái sử dụng — phải kéo riêng, nhẹ, chỉ cho đúng 1 campaign.
 
     min_installs: lọc bớt quốc gia quá ít traffic (mặc định 5) — 1-2 install
     dễ ra ROAS D0 = 0.0 (chưa kịp có revenue D0) trông như "tệ nhất" dù không
     có ý nghĩa thống kê gì, đã gặp thật khi test (145 nước, rất nhiều nước chỉ
     1 install)."""
-    if raw_adjust_df is None or raw_adjust_df.empty:
+    if campaign_country_df is None or campaign_country_df.empty:
         return pd.DataFrame()
-    df = raw_adjust_df[
-        raw_adjust_df["app"].astype(str).str.startswith(product_id, na=False)
-        & (raw_adjust_df["campaign"] == campaign)
-    ].copy()
-    if df.empty:
-        return df
 
-    for col in ("installs", "network_cost"):
-        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
-    df["_revenue_d0"] = pd.to_numeric(df.get("roas_ad_d0"), errors="coerce").fillna(0) * df["network_cost"]
-    df["_retained_d1"] = pd.to_numeric(df.get("retention_rate_d1"), errors="coerce").fillna(0) * df["installs"]
+    df = campaign_country_df.copy()
+    for col in ("installs", "ecpi_all", "roas_ad_d0", "retention_rate_d1"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    grouped = df.groupby("country", as_index=False).agg(
-        installs=("installs", "sum"),
-        network_cost=("network_cost", "sum"),
-        _revenue_d0=("_revenue_d0", "sum"),
-        _retained_d1=("_retained_d1", "sum"),
+    df = df.rename(
+        columns={
+            "country": "Quốc gia",
+            "installs": "Installs",
+            "ecpi_all": "CPI",
+            "roas_ad_d0": "ROAS D0",
+            "retention_rate_d1": "Retention D1",
+        }
     )
-    grouped["CPI"] = grouped["network_cost"] / grouped["installs"].replace(0, pd.NA)
-    grouped["ROAS D0"] = grouped["_revenue_d0"] / grouped["network_cost"].replace(0, pd.NA)
-    grouped["Retention D1"] = grouped["_retained_d1"] / grouped["installs"].replace(0, pd.NA)
-    grouped = grouped.rename(columns={"country": "Quốc gia", "installs": "Installs"})
     # Bỏ quốc gia quá ít install (xem docstring) — tránh nhiễu chiếm hết đầu bảng.
-    grouped = grouped[grouped["Installs"] >= min_installs]
-    return (
-        grouped[["Quốc gia", "Installs", "CPI", "ROAS D0", "Retention D1"]]
-        .sort_values("ROAS D0")
-        .reset_index(drop=True)
-    )
+    df = df[df["Installs"] >= min_installs]
+    cols = [c for c in ["Quốc gia", "Installs", "CPI", "ROAS D0", "Retention D1"] if c in df.columns]
+    return df[cols].sort_values("ROAS D0").reset_index(drop=True)
 
 
 def creative_slice(creative_df: pd.DataFrame, campaign: str) -> pd.DataFrame:

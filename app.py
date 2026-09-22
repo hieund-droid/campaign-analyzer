@@ -409,69 +409,81 @@ def get_known_product_ids(app_tokens_raw: str, api_token: str):
 
 
 # ══════════════════════════════════════════════════════════════════════
-# Sidebar — Benchmark cho Xét nghiệm (chuyển từ trang Xét nghiệm lên đây
-# 23/09/2026, theo yêu cầu user: "chỉ cần nhập 1 lần rồi dùng cho tất cả các
-# tính năng trong app" — ngang hàng với token Adjust, không cần vào sâu trang
-# Xét nghiệm mới thấy/sửa được. Đặt SAU get_known_product_ids() (cần hàm này
-# để có danh sách app) — vẫn chạy Ở MODULE-LEVEL nên hiện xuyên suốt mọi
-# trang, giống khối token phía trên.
+# TRANG — Benchmark (tách thành trang riêng 23/09/2026 — trước đó thử để ở
+# sidebar theo yêu cầu "nhập 1 lần dùng cho mọi tính năng", nhưng user phản
+# hồi để trong sidebar (thu gọn trong expander, cột hẹp) BẤT TIỆN — chuyển
+# hẳn thành 1 trang ngang hàng Adjust/Cảnh báo/Xét nghiệm, nhiều chỗ hơn để
+# nhập + đọc số, vẫn LÀ 1 kho benchmark DUY NHẤT dùng chung cho Tầng 1 và tab
+# "Theo quốc gia" ở trang Xét nghiệm (không đổi gì ở benchmarks.py).
 # ══════════════════════════════════════════════════════════════════════
-with st.sidebar:
-    st.divider()
-    st.markdown("**📏 Benchmark**")
-    _bench_api = st.session_state.get("adjust_api_token", "")
-    _bench_apps_raw = st.session_state.get("adjust_app_tokens", "")
-    _bench_product_ids, _bench_ids_err = get_known_product_ids(_bench_apps_raw, _bench_api)
-    if _bench_ids_err:
-        st.caption(_bench_ids_err)
-    elif not _bench_product_ids:
-        st.caption("Chưa tìm thấy app nào cho token này.")
-    else:
-        _bench_app = st.selectbox("App", _bench_product_ids, key="sidebar_bench_app")
-        _saved_bench = bm.get_doctor_benchmarks(_bench_app)
-        with st.expander(f"Benchmark cho {_bench_app}", expanded=False):
-            st.caption(
-                "Tách riêng LTV (ARPU D0) khỏi ROAS D0 — ROAS D0 = LTV ÷ CPI, "
-                "1 mình ROAS không biết được xấu vì CPI đắt hay vì LTV tụt."
-            )
-            # key CÓ tên app (đổi theo _bench_app) — để widget TỰ RESET giá trị
-            # đúng app khi đổi app ở selectbox trên (nếu dùng key cố định,
-            # Streamlit sẽ giữ giá trị cũ của app trước, không load lại đúng số
-            # đã lưu của app mới chọn).
-            _b_cpi = st.number_input(
-                "CPI bình thường ($)", min_value=0.0,
-                value=float(_saved_bench.get("cpi") or 0.0), step=0.001, format="%.4f",
-                key=f"sidebar_bench_cpi_{_bench_app}",
-            )
-            _b_arpu = st.number_input(
-                "LTV (ARPU D0) bình thường ($)", min_value=0.0,
-                value=float(_saved_bench.get("arpu_d0") or 0.0), step=0.001, format="%.4f",
-                key=f"sidebar_bench_arpu_{_bench_app}",
-            )
-            _b_roas = st.number_input(
-                "ROAS D0 bình thường (%, VD 15 = 15%)", min_value=0.0,
-                value=float((_saved_bench.get("roas_d0") or 0.0) * 100), step=1.0,
-                key=f"sidebar_bench_roas_{_bench_app}",
-            )
-            _b_retention = st.number_input(
-                "Retention D1 bình thường (%, VD 25 = 25%)", min_value=0.0,
-                value=float((_saved_bench.get("retention_d1") or 0.0) * 100), step=1.0,
-                key=f"sidebar_bench_retention_{_bench_app}",
-            )
-            _b_threshold = st.number_input(
-                "Ngưỡng lệch coi là có vấn đề (%)", min_value=5.0,
-                value=float(_saved_bench.get("threshold_pct") or 20.0), step=5.0,
-                key=f"sidebar_bench_threshold_{_bench_app}",
-            )
-            if st.button("💾 Lưu benchmark", key=f"sidebar_bench_save_{_bench_app}"):
-                bm.save_doctor_benchmarks(
-                    _bench_app,
-                    {
-                        "cpi": _b_cpi, "arpu_d0": _b_arpu, "roas_d0": _b_roas / 100,
-                        "retention_d1": _b_retention / 100, "threshold_pct": _b_threshold,
-                    },
-                )
-                st.success(f"Đã lưu benchmark cho {_bench_app}.")
+def page_benchmark():
+    st.title("Benchmark")
+    st.caption(
+        "Nhập benchmark \"bình thường\" CPI/LTV (ARPU D0)/ROAS D0/Retention D1 "
+        "cho từng app — dùng CHUNG cho cả Tầng 1 và tab \"Theo quốc gia\" ở "
+        "trang Xét nghiệm. Chỉ cần nhập 1 lần, lần sau tự điền sẵn."
+    )
+    api_token = st.session_state.get("adjust_api_token", "")
+    app_tokens_raw = st.session_state.get("adjust_app_tokens", "")
+    st.caption("🔒 Cần token Adjust cá nhân — nhập ở sidebar bên trái.")
+
+    product_ids, ids_err = get_known_product_ids(app_tokens_raw, api_token)
+    if ids_err:
+        st.info(f"👆 {ids_err}")
+        return
+    if not product_ids:
+        st.warning("Không tìm thấy app nào cho token này trong 7 ngày qua — kiểm tra lại App Token ở sidebar.")
+        return
+
+    bench_app = st.selectbox("App", product_ids, key="page_bench_app")
+    saved_bench = bm.get_doctor_benchmarks(bench_app)
+    st.caption(
+        "Tách riêng LTV (ARPU D0) khỏi ROAS D0 — ROAS D0 = LTV ÷ CPI, 1 mình "
+        "ROAS không biết được xấu vì CPI đắt hay vì LTV tụt."
+    )
+    # key CÓ tên app (đổi theo bench_app) — để widget TỰ RESET giá trị đúng
+    # app khi đổi app ở selectbox trên, không bị dính giá trị của app trước.
+    bcol1, bcol2, bcol3, bcol4, bcol5 = st.columns(5)
+    with bcol1:
+        b_cpi = st.number_input(
+            "CPI bình thường ($)", min_value=0.0,
+            value=float(saved_bench.get("cpi") or 0.0), step=0.001, format="%.4f",
+            key=f"page_bench_cpi_{bench_app}",
+        )
+    with bcol2:
+        b_arpu = st.number_input(
+            "LTV (ARPU D0) bình thường ($)", min_value=0.0,
+            value=float(saved_bench.get("arpu_d0") or 0.0), step=0.001, format="%.4f",
+            key=f"page_bench_arpu_{bench_app}",
+        )
+    with bcol3:
+        b_roas = st.number_input(
+            "ROAS D0 bình thường (%, VD 15 = 15%)", min_value=0.0,
+            value=float((saved_bench.get("roas_d0") or 0.0) * 100), step=1.0,
+            key=f"page_bench_roas_{bench_app}",
+        )
+    with bcol4:
+        b_retention = st.number_input(
+            "Retention D1 bình thường (%, VD 25 = 25%)", min_value=0.0,
+            value=float((saved_bench.get("retention_d1") or 0.0) * 100), step=1.0,
+            key=f"page_bench_retention_{bench_app}",
+        )
+    with bcol5:
+        b_threshold = st.number_input(
+            "Ngưỡng lệch coi là có vấn đề (%)", min_value=5.0,
+            value=float(saved_bench.get("threshold_pct") or 20.0), step=5.0,
+            key=f"page_bench_threshold_{bench_app}",
+        )
+
+    if st.button("💾 Lưu benchmark", type="primary", key=f"page_bench_save_{bench_app}"):
+        bm.save_doctor_benchmarks(
+            bench_app,
+            {
+                "cpi": b_cpi, "arpu_d0": b_arpu, "roas_d0": b_roas / 100,
+                "retention_d1": b_retention / 100, "threshold_pct": b_threshold,
+            },
+        )
+        st.success(f"Đã lưu benchmark cho {bench_app}.")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1084,9 +1096,9 @@ def page_campaign_doctor():
         key="doc_selected_campaign",
     )
 
-    # Benchmark ĐÃ CHUYỂN lên sidebar (23/09/2026, theo yêu cầu user: "nhập 1
-    # lần dùng cho tất cả tính năng") — trang này chỉ ĐỌC, không còn form nhập
-    # inline nữa. Muốn sửa, vào mục "📏 Benchmark" ở sidebar bên trái.
+    # Benchmark giờ là 1 TRANG RIÊNG (23/09/2026 — trước đó thử ở sidebar,
+    # user phản hồi bất tiện) — trang này chỉ ĐỌC, không còn form nhập inline
+    # nữa. Muốn sửa, vào trang "Benchmark".
     saved_bench = bm.get_doctor_benchmarks(product_id)
     doc_threshold = saved_bench.get("threshold_pct") or 20.0
     benchmark = {
@@ -1097,8 +1109,8 @@ def page_campaign_doctor():
     }
     if not any(benchmark.values()):
         st.info(
-            f"👈 Chưa có benchmark cho app **{product_id}** — vào mục "
-            "**📏 Benchmark** ở sidebar bên trái để nhập (dùng chung cho cả "
+            f"👈 Chưa có benchmark cho app **{product_id}** — vào trang "
+            "**Benchmark** (sidebar bên trái) để nhập (dùng chung cho cả "
             "Tầng 1 và bảng \"Theo quốc gia\" bên dưới)."
         )
     else:
@@ -1309,12 +1321,15 @@ def page_campaign_doctor():
 # Đã bỏ HẲN mọi trang liên quan BigQuery/eCPM (22/09/2026 — user chỉ ra
 # BigQuery không có dữ liệu realtime nên vô dụng cho việc theo dõi/chẩn đoán):
 # "Report Builder", "Market Board", "Meta + Adjust" — xem GHI_CHU_TIEN_DO.md.
-# Giờ chỉ còn 3 trang, TẤT CẢ đều 100% dữ liệu Adjust, không dùng BigQuery.
+# THÊM trang "Benchmark" (23/09/2026) — tách riêng khỏi trang Xét nghiệm (và
+# trước đó thử để ở sidebar, user phản hồi bất tiện) để có đủ chỗ nhập +
+# nhìn benchmark, dùng chung cho Tầng 1 lẫn tab "Theo quốc gia" ở Xét nghiệm.
 pg = st.navigation(
     [
         st.Page(page_adjust, title="Adjust", icon=":material/monitoring:", default=True),
         st.Page(page_alerts, title="Cảnh báo", icon=":material/warning:"),
         st.Page(page_campaign_doctor, title="Xét nghiệm", icon=":material/stethoscope:"),
+        st.Page(page_benchmark, title="Benchmark", icon=":material/rule:"),
     ],
     expanded=True,
 )

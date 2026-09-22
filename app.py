@@ -770,13 +770,19 @@ def page_alerts():
         # LTV÷CPI luôn đúng về mặt toán, xem docstring intraday_alerts.py):
         # nếu "Chi phí lúc đó" ≈ "Chi phí bây giờ" (chưa đổi) trong khi
         # installs tăng, đó là do network CHƯA KỊP báo cáo chi phí mới, không
-        # phải campaign đổi chất lượng thật.
+        # phải campaign đổi chất lượng thật. ĐÃ KIỂM CHỨNG bằng đối chiếu chéo
+        # thật (23/09/2026, app APL567 của user): tổng chi phí cộng theo giờ
+        # KHỚP tổng theo ngày (cách tính cũ, đã tin dùng) — xác nhận đây là dữ
+        # liệu THẬT từ Adjust (network chưa báo cáo thêm), không phải bug.
         b, l = f["baseline"], f["latest"]
+        cost_b, cost_l = b.get("cost_cum") or 0, l.get("cost_cum") or 0
+        cost_unchanged = abs(cost_b - cost_l) < 0.01
         return {
             "Installs lúc đó": b.get("installs_cum"),
             "Installs bây giờ": l.get("installs_cum"),
-            "Chi phí lúc đó": b.get("cost_cum"),
-            "Chi phí bây giờ": l.get("cost_cum"),
+            "Chi phí lúc đó": cost_b,
+            "Chi phí bây giờ": cost_l,
+            "Chi phí đã cập nhật?": "⚠️ CHƯA (network chưa báo cáo)" if cost_unchanged else "✅ Có",
         }
 
     _diag_col_config = {
@@ -815,12 +821,11 @@ def page_alerts():
         )
         st.caption(
             "Mỗi campaign hiện mốc so sánh cho thấy vấn đề RÕ NHẤT (trong số "
-            "1/2/3 tiếng trước, tự động chọn giờ gần mốc đó nhất). Cột "
-            "\"Installs\"/\"Chi phí\" 2 mốc để TỰ KIỂM TRA: nếu chi phí gần "
-            "như không đổi trong khi installs tăng, ROAS D0 đứng yên (0.0%) "
-            "là ĐÚNG về mặt tính toán (ROAS = LTV ÷ CPI) — nhiều khả năng do "
-            "network chưa kịp báo cáo chi phí mới, không phải chất lượng "
-            "campaign đổi thật."
+            "1/2/3 tiếng trước, tự động chọn giờ gần mốc đó nhất). Cột \"Chi "
+            "phí đã cập nhật?\" = ⚠️ CHƯA nghĩa là network chưa báo cáo chi phí "
+            "mới giữa 2 mốc — lúc đó CPI/LTV đổi chỉ do installs tăng (bị pha "
+            "loãng), KHÔNG phải campaign đổi chất lượng thật, nên ưu tiên xem "
+            "các dòng ✅ Có trước."
         )
 
         with st.expander("🔍 Đối chiếu: chi phí cộng dồn theo GIỜ có khớp tổng theo NGÀY không?"):

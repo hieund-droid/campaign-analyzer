@@ -4,15 +4,21 @@
 
 TẦNG 1 — CPI đắt vs User kém: so CPI/ARPU D0 (LTV)/ROAS D0/Retention D1 của
 CHÍNH campaign (cộng dồn cả khoảng ngày, tính đúng cách — không trung bình
-cộng trực tiếp) với BENCHMARK do user tự nhập (xem benchmarks.py —
-get_doctor_benchmarks()).
+cộng trực tiếp) với BENCHMARK. ĐỔI 23/09/2026: benchmark giờ nhập THEO QUỐC
+GIA (xem benchmarks.py — get_all_country_benchmarks()), KHÔNG còn benchmark
+app-level — Tầng 1 (gộp cả campaign) không còn benchmark để so nữa, việc so
+benchmark chỉ còn ở hàm country_slice() bên dưới (mỗi quốc gia so với benchmark
+của chính nó). `diagnose_tier1()` vẫn giữ nguyên để dùng cho country_slice().
 - CPI đắt: CPI thực tế CAO HƠN benchmark quá `threshold_pct`%.
 - User kém: ARPU D0 (LTV) HOẶC Retention D1 HOẶC ROAS D0 thực tế THẤP HƠN
   benchmark quá `threshold_pct`% (1 trong 3 thấp là đủ để coi là "user kém").
   Tách riêng ARPU D0 (= LTV tại D0) khỏi ROAS D0 — vì ROAS D0 = ARPU D0 ÷ CPI,
   1 mình ROAS D0 KHÔNG tách được ROAS xấu là do CPI đắt lên hay do LTV tụt
   xuống (user chỉ ra đúng vấn đề này 16/09/2026) — theo dõi cả 2 riêng biệt để
-  biết CHÍNH XÁC lever nào đang có vấn đề.
+  biết CHÍNH XÁC lever nào đang có vấn đề. (Benchmark theo quốc gia hiện CHỈ
+  còn CPI + ARPU D0 — ROAS D0/Retention D1 benchmark đã bỏ 23/09/2026, "chỉ
+  cần biết về CPI và LTV thôi" — `diagnose_tier1()` vẫn nhận đủ 4 key, chỉ là
+  2 key roas_d0/retention_d1 sẽ luôn None nên tự bỏ qua điều kiện đó.)
 Có thể vừa CPI đắt vừa User kém cùng lúc (2 vấn đề riêng biệt, không loại
 trừ nhau).
 
@@ -162,19 +168,17 @@ def country_slice(
     df = df[pd.to_numeric(df["installs"], errors="coerce") >= min_installs].copy()
 
     if benchmark_by_country:
+        # Benchmark giờ CHỈ còn cpi/arpu_d0 (đã bỏ ROAS D0/Retention D1/ngưỡng
+        # lệch tự nhập — user: "benchmark chỉ cần biết về CPI và LTV thôi").
+        # Ngưỡng lệch dùng CỐ ĐỊNH DEFAULT_THRESHOLD_PCT cho mọi quốc gia.
         def _diagnose_row(r):
             country_bench = benchmark_by_country.get(r.get("country")) or {}
             if not any(country_bench.values()):
                 return None
             return diagnose_tier1(
-                {
-                    "cpi": r.get("ecpi_all"),
-                    "arpu_d0": r.get("arpu_d0"),
-                    "roas_d0": r.get("roas_ad_d0"),
-                    "retention_d1": r.get("retention_rate_d1"),
-                },
+                {"cpi": r.get("ecpi_all"), "arpu_d0": r.get("arpu_d0")},
                 country_bench,
-                threshold_pct=country_bench.get("threshold_pct") or DEFAULT_THRESHOLD_PCT,
+                threshold_pct=DEFAULT_THRESHOLD_PCT,
             )
 
         bench_results = df.apply(_diagnose_row, axis=1)

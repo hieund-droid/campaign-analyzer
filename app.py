@@ -433,12 +433,11 @@ def load_known_countries(app_tokens_raw: str, api_token: str, product_id: str):
 def page_benchmark():
     st.title("Benchmark")
     st.caption(
-        "Nhập benchmark \"bình thường\" CPI/LTV (ARPU D0)/ROAS D0/Retention D1 "
-        "cho TỪNG QUỐC GIA của từng app (đổi 23/09/2026 — campaign chạy GLOBAL "
-        "thì CPI/LTV \"bình thường\" của mỗi nước khác nhau rất nhiều, benchmark "
-        "chung cho cả app không có ý nghĩa). Dùng cho bảng \"Theo quốc gia\" ở "
-        "trang Xét nghiệm — chỉ cần nhập 1 lần cho mỗi quốc gia, lần sau tự "
-        "điền sẵn."
+        "Benchmark \"bình thường\" CPI + LTV (ARPU D0) cho TỪNG QUỐC GIA của "
+        "từng app (campaign chạy GLOBAL thì CPI/LTV \"bình thường\" của mỗi "
+        "nước khác nhau rất nhiều, benchmark chung cho cả app không có ý "
+        "nghĩa). Dùng cho bảng \"Theo quốc gia\" ở trang Xét nghiệm — sửa "
+        "trực tiếp trong bảng bên dưới rồi bấm Lưu."
     )
     api_token = st.session_state.get("adjust_api_token", "")
     app_tokens_raw = st.session_state.get("adjust_app_tokens", "")
@@ -452,72 +451,48 @@ def page_benchmark():
         st.warning("Không tìm thấy app nào cho token này trong 7 ngày qua — kiểm tra lại App Token ở sidebar.")
         return
 
-    bcol_app, bcol_country = st.columns(2)
-    with bcol_app:
-        bench_app = st.selectbox("App", product_ids, key="page_bench_app")
-    with bcol_country:
-        countries, countries_err = load_known_countries(app_tokens_raw, api_token, bench_app)
-        if countries_err:
-            st.error(f"❌ {countries_err}")
-            return
-        if not countries:
-            st.warning(f"Không tìm thấy quốc gia nào cho app {bench_app} trong 30 ngày qua.")
-            return
-        bench_country = st.selectbox("Quốc gia", countries, key=f"page_bench_country_{bench_app}")
+    bench_app = st.selectbox("App", product_ids, key="page_bench_app")
+    countries, countries_err = load_known_countries(app_tokens_raw, api_token, bench_app)
+    if countries_err:
+        st.error(f"❌ {countries_err}")
+        return
+    if not countries:
+        st.warning(f"Không tìm thấy quốc gia nào cho app {bench_app} trong 30 ngày qua.")
+        return
 
-    already_set = bm.list_benchmarked_countries(bench_app)
-    if already_set:
-        st.caption(f"Đã có benchmark cho {len(already_set)}/{len(countries)} quốc gia của app này: {', '.join(already_set)}.")
+    saved = bm.get_all_country_benchmarks(bench_app)
+    st.caption(f"Đã có benchmark cho {len(saved)}/{len(countries)} quốc gia của app **{bench_app}**.")
 
-    saved_bench = bm.get_doctor_benchmarks(bench_app, bench_country)
+    table_rows = [
+        {"Quốc gia": country, "CPI": vals.get("cpi"), "LTV (ARPU D0)": vals.get("arpu_d0")}
+        for country, vals in sorted(saved.items())
+    ]
+    df_bench = pd.DataFrame(table_rows, columns=["Quốc gia", "CPI", "LTV (ARPU D0)"])
+
     st.caption(
-        "Tách riêng LTV (ARPU D0) khỏi ROAS D0 — ROAS D0 = LTV ÷ CPI, 1 mình "
-        "ROAS không biết được xấu vì CPI đắt hay vì LTV tụt."
+        "Sửa trực tiếp trong bảng — bấm dòng trống cuối bảng để THÊM quốc gia "
+        "mới (chọn từ danh sách), xoá dòng (chọn dòng → nhấn phím Delete) để "
+        "BỎ benchmark của quốc gia đó. Nhớ bấm **💾 Lưu bảng** sau khi sửa."
     )
-    # key CÓ tên app + quốc gia — để widget TỰ RESET giá trị đúng khi đổi app
-    # hoặc đổi quốc gia ở 2 selectbox trên, không bị dính giá trị cũ.
-    _bk = f"{bench_app}_{bench_country}"
-    bcol1, bcol2, bcol3, bcol4, bcol5 = st.columns(5)
-    with bcol1:
-        b_cpi = st.number_input(
-            "CPI bình thường ($)", min_value=0.0,
-            value=float(saved_bench.get("cpi") or 0.0), step=0.001, format="%.4f",
-            key=f"page_bench_cpi_{_bk}",
-        )
-    with bcol2:
-        b_arpu = st.number_input(
-            "LTV (ARPU D0) bình thường ($)", min_value=0.0,
-            value=float(saved_bench.get("arpu_d0") or 0.0), step=0.001, format="%.4f",
-            key=f"page_bench_arpu_{_bk}",
-        )
-    with bcol3:
-        b_roas = st.number_input(
-            "ROAS D0 bình thường (%, VD 15 = 15%)", min_value=0.0,
-            value=float((saved_bench.get("roas_d0") or 0.0) * 100), step=1.0,
-            key=f"page_bench_roas_{_bk}",
-        )
-    with bcol4:
-        b_retention = st.number_input(
-            "Retention D1 bình thường (%, VD 25 = 25%)", min_value=0.0,
-            value=float((saved_bench.get("retention_d1") or 0.0) * 100), step=1.0,
-            key=f"page_bench_retention_{_bk}",
-        )
-    with bcol5:
-        b_threshold = st.number_input(
-            "Ngưỡng lệch coi là có vấn đề (%)", min_value=5.0,
-            value=float(saved_bench.get("threshold_pct") or 20.0), step=5.0,
-            key=f"page_bench_threshold_{_bk}",
-        )
+    edited = st.data_editor(
+        df_bench, width="stretch", hide_index=True, num_rows="dynamic",
+        key=f"bench_editor_{bench_app}",
+        column_config={
+            "Quốc gia": st.column_config.SelectboxColumn("Quốc gia", options=countries, required=True),
+            "CPI": st.column_config.NumberColumn("CPI ($)", min_value=0.0, step=0.0001, format="%.4f"),
+            "LTV (ARPU D0)": st.column_config.NumberColumn("LTV / ARPU D0 ($)", min_value=0.0, step=0.0001, format="%.4f"),
+        },
+    )
 
-    if st.button("💾 Lưu benchmark", type="primary", key=f"page_bench_save_{_bk}"):
-        bm.save_doctor_benchmarks(
-            bench_app, bench_country,
-            {
-                "cpi": b_cpi, "arpu_d0": b_arpu, "roas_d0": b_roas / 100,
-                "retention_d1": b_retention / 100, "threshold_pct": b_threshold,
-            },
-        )
-        st.success(f"Đã lưu benchmark cho {bench_app} — {bench_country}.")
+    if st.button("💾 Lưu bảng", type="primary", key=f"bench_save_{bench_app}"):
+        entries = [
+            {"country": row.get("Quốc gia"), "cpi": row.get("CPI"), "arpu_d0": row.get("LTV (ARPU D0)")}
+            for row in edited.to_dict("records")
+            if row.get("Quốc gia")
+        ]
+        bm.save_all_country_benchmarks(bench_app, entries)
+        st.success(f"Đã lưu benchmark cho {len(entries)} quốc gia của {bench_app}.")
+        st.rerun()
 
 
 # ══════════════════════════════════════════════════════════════════════

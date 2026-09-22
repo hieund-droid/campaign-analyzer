@@ -763,17 +763,20 @@ def page_alerts():
 
     st.subheader("⚡ Cảnh báo trong ngày (thời gian thực)")
     st.caption(
-        "So với các mốc ~1/2/3 tiếng trước — lấy TRỰC TIẾP lịch sử theo GIỜ từ "
-        "Adjust (không cần ai mở app đúng lúc để \"chụp\" số như trước, luôn có "
-        "dữ liệu ngay khi bấm Apply). Theo dõi CẢ 3: CPI (chi phí), LTV/ARPU D0 "
-        "(giá trị user), ROAS D0 (= LTV ÷ CPI) — để biết ROAS biến động là do chi "
-        "phí đắt lên hay do giá trị user tụt xuống."
+        "So với các mốc ~1/2/3/6 tiếng trước — lấy TRỰC TIẾP lịch sử theo GIỜ "
+        "từ Adjust (không cần ai mở app đúng lúc để \"chụp\" số như trước, luôn "
+        "có dữ liệu ngay khi bấm Apply). **Gắn cờ dựa vào ROAS D0** (đổi "
+        "23/09/2026) — CPI/LTV vẫn hiện để GIẢI THÍCH ROAS đổi vì chi phí đắt "
+        "lên hay vì giá trị user tụt, nhưng KHÔNG dùng CPI/LTV để tự quyết định "
+        "cảnh báo nữa (2 chỉ số này rất hay đổi % y hệt nhau chỉ vì installs "
+        "tăng trong khi Adjust chưa cập nhật chi phí — không phản ánh chất "
+        "lượng campaign đổi thật, xem GHI_CHU_TIEN_DO.md)."
     )
     al_realtime_pct = st.number_input(
-        "Mức thay đổi cần báo động (%)",
+        "Mức ROAS D0 giảm cần báo động (%)",
         min_value=5, value=20, step=5, key="al_realtime_pct",
-        help="So với các mốc 1/2/3 tiếng trước — VD CPI tăng vọt hoặc LTV tụt "
-        "quá mức này sẽ hiện ở bảng dưới đây.",
+        help="Chỉ dựa vào ROAS D0 giảm so với các mốc 1/2/3/6 tiếng trước — VD "
+        "để 20 nghĩa là ROAS D0 tụt từ 20% trở lên mới hiện cảnh báo.",
     )
 
     hourly_df = st.session_state.al_hourly_df

@@ -143,6 +143,16 @@ def compare_since_hour(cum_df: pd.DataFrame, app: str, campaign: str, baseline_h
 
 
 def _flag_entry(app: str, campaign: str, cmp: dict, threshold_pct: float, min_installs: int, target_label) -> dict | None:
+    """ĐIỀU KIỆN GẮN CỜ (đổi 23/09/2026, theo yêu cầu user): CHỈ dựa vào ROAS
+    D0 giảm vượt threshold_pct% — không còn dùng CPI tăng/ARPU giảm làm điều
+    kiện ĐỘC LẬP nữa. Lý do: đã kiểm chứng nhiều lần bằng số thật + đại số —
+    CPI và ARPU rất hay đổi %  y hệt nhau (do ROAS=ARPU÷CPI) chỉ vì installs
+    tăng trong khi chi phí Adjust trả về bị đứng yên (network chưa cập nhật,
+    xem GHI_CHU_TIEN_DO.md) — KHÔNG phản ánh chất lượng campaign đổi thật.
+    ROAS (= doanh thu ÷ chi phí, không phụ thuộc installs) là tín hiệu ĐÁNG
+    TIN CẬY nhất trong 3 chỉ số để quyết định có đáng cảnh báo hay không. Vẫn
+    tính cpi_bad/arpu_bad để HIỂN THỊ (giải thích ROAS đổi vì CPI hay vì ARPU)
+    — chỉ không dùng chúng để QUYẾT ĐỊNH gắn cờ nữa."""
     if cmp is None:
         return None
     if min_installs and (cmp["latest"].get("installs_cum") or 0) < min_installs:
@@ -150,7 +160,7 @@ def _flag_entry(app: str, campaign: str, cmp: dict, threshold_pct: float, min_in
     cpi_bad = cmp["cpi_pct_change"] is not None and cmp["cpi_pct_change"] >= threshold_pct
     roas_bad = cmp["roas_d0_pct_change"] is not None and cmp["roas_d0_pct_change"] <= -threshold_pct
     arpu_bad = cmp["arpu_d0_pct_change"] is not None and cmp["arpu_d0_pct_change"] <= -threshold_pct
-    if not (cpi_bad or roas_bad or arpu_bad):
+    if not roas_bad:
         return None
     # ĐÃ KIỂM CHỨNG bằng đối chiếu chéo với user thật (23/09/2026): khi chi phí
     # (cost_cum) KHÔNG đổi giữa 2 mốc, CPI/ARPU đổi chỉ do installs bị pha
@@ -175,12 +185,12 @@ def list_flagged_hours_ago(
     min_installs: int = 0,
 ) -> list:
     """CẢNH BÁO TRONG NGÀY — kiểm tra các mốc 1/2/3/6 tiếng trước (mặc định),
-    gắn cờ nếu BẤT KỲ mốc nào cho thấy CPI TĂNG hoặc ROAS D0/ARPU D0 GIẢM vượt
-    threshold_pct%. Mỗi campaign chỉ trả về 1 dòng — ƯU TIÊN mốc có chi phí ĐÃ
-    THẬT SỰ cập nhật (cost_changed=True, đáng tin hơn — xem _flag_entry()),
-    trong số đó chọn ROAS D0 giảm NHIỀU NHẤT; nếu KHÔNG mốc nào có chi phí
-    cập nhật, đành chọn mốc ROAS giảm nhiều nhất trong số còn lại (vẫn hiện,
-    có nhãn cảnh báo riêng ở UI)."""
+    gắn cờ nếu BẤT KỲ mốc nào cho thấy ROAS D0 GIẢM vượt threshold_pct% (CHỈ
+    dựa vào ROAS — xem lý do ở docstring _flag_entry()). Mỗi campaign chỉ trả
+    về 1 dòng — ƯU TIÊN mốc có chi phí ĐÃ THẬT SỰ cập nhật (cost_changed=True,
+    đáng tin hơn), trong số đó chọn ROAS D0 giảm NHIỀU NHẤT; nếu KHÔNG mốc nào
+    có chi phí cập nhật, đành chọn mốc ROAS giảm nhiều nhất trong số còn lại
+    (vẫn hiện, có nhãn cảnh báo riêng ở UI)."""
     if cum_df is None or cum_df.empty:
         return []
     flagged = []

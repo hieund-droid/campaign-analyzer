@@ -100,7 +100,11 @@ def call_adjust(
         "utc_offset": UTC_OFFSET,
     }
 
-    response = requests.get(ENDPOINT, headers=headers, params=params, timeout=60)
+    # timeout 60s TỪNG GÂY LỖI THẬT (22/09/2026): app nhiều dữ liệu (VD APL567)
+    # kéo detail 30 ngày (app,day,campaign,country) có thể mất >60s — đã đo
+    # thử app AAP874 (ít dữ liệu hơn nhiều): 30 ngày mất 35.7s cho 126,851 dòng,
+    # sát ngưỡng 60s. Tăng lên 180s cho app nhiều dữ liệu hơn vẫn kịp.
+    response = requests.get(ENDPOINT, headers=headers, params=params, timeout=180)
 
     if not response.ok:
         msg = f"HTTP {response.status_code} (dimensions={dimensions}): {response.text}"

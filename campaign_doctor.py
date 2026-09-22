@@ -17,12 +17,15 @@ Có thể vừa CPI đắt vừa User kém cùng lúc (2 vấn đề riêng bi�
 trừ nhau).
 
 TẦNG 2 — nguyên nhân sâu hơn:
-- Nhánh CPI đắt: mổ theo công thức phễu CPI = CPM ÷ (CTR × CVR) — CẦN dữ
-  liệu BigQuery (Meta CPM/CTR/CVR), CHỈ áp dụng được nếu campaign đã ghép
-  được với BigQuery (trích được campaign_id — xem meta_adjust_merge.py). So
-  với TRUNG BÌNH CÁC CAMPAIGN KHÁC cùng app/khoảng ngày (peer average, tự
-  động tính, không cần benchmark tay) để biết CPM/CTR/CVR cái nào lệch nhiều
-  nhất.
+- Nhánh CPI đắt: mổ theo công thức phễu CPI = CPM ÷ (CTR × CVR). TRƯỚC ĐÂY
+  (đến 21/09/2026) cần ghép BigQuery (Meta CPM/CTR/CVR) mới có dữ liệu này.
+  ĐÃ BỎ BigQuery hẳn (22/09/2026 — user chỉ ra BigQuery không có realtime nên
+  vô dụng cho Cảnh báo/Xét nghiệm) — kiểm tra lại thì Adjust CÓ SẴN
+  `network_impressions`/`network_clicks` (network tự báo cáo, cùng nguồn với
+  network_cost đã dùng từ đầu) — đủ để tự tính CPM/CTR/CVR, KHÔNG cần
+  BigQuery/ghép campaign_id gì nữa (xem `aggregate_adjust_funnel()`). So với
+  TRUNG BÌNH CÁC CAMPAIGN KHÁC cùng app/khoảng ngày (peer average, tự động
+  tính, không cần benchmark tay) để biết CPM/CTR/CVR cái nào lệch nhiều nhất.
 - Nhánh User kém: so Retention D1 (giữ chân) vs ROAS D0 (kiếm tiền) với
   benchmark — Retention thấp → vấn đề GIỮ CHÂN; Retention ổn nhưng ROAS D0
   thấp → vấn đề KIẾM TIỀN (monetization).
@@ -34,8 +37,6 @@ kiểm chứng là dữ liệu thật, không phải suy đoán).
 """
 
 import pandas as pd
-
-import meta_adjust_merge as mam
 
 DEFAULT_THRESHOLD_PCT = 20.0
 
@@ -175,23 +176,44 @@ def creative_slice(creative_df: pd.DataFrame, campaign: str) -> pd.DataFrame:
     return df[cols].sort_values("ROAS D0").reset_index(drop=True)
 
 
-def aggregate_bq_rows(bq_df: pd.DataFrame) -> dict:
-    """Gộp ĐÚNG CÁCH nhiều dòng BigQuery (day/country) thành 1 bộ CPM/CTR/CVR —
-    cộng dồn spend/impressions/clicks/installs rồi chia lại (không trung bình
-    cộng trực tiếp cột cpm/ctr_pct/cvr_pct qua nhiều dòng)."""
-    if bq_df is None or bq_df.empty:
-        return {"cpm": None, "ctr_pct": None, "cvr_pct": None, "cpi": None, "spend": 0, "installs": 0}
-    spend = pd.to_numeric(bq_df["spend"], errors="coerce").fillna(0).sum()
-    impressions = pd.to_numeric(bq_df["impressions"], errors="coerce").fillna(0).sum()
-    clicks = pd.to_numeric(bq_df["clicks"], errors="coerce").fillna(0).sum()
-    installs = pd.to_numeric(bq_df["installs"], errors="coerce").fillna(0).sum()
+def aggregate_adjust_funnel(
+    raw_adjust_df: pd.DataFrame,
+    product_id: str,
+    campaign: str | None = None,
+    exclude_campaign: str | None = None,
+) -> dict:
+    """Gộp ĐÚNG CÁCH network_impressions/network_clicks/network_cost/installs
+    (Adjust) thành CPM/CTR/CVR/CPI — THAY THẾ aggregate_bq_rows() cũ (đã bỏ
+    BigQuery 22/09/2026 — xem docstring đầu file). Cộng dồn tử/mẫu rồi chia
+    lại, không trung bình cộng trực tiếp cột %.
+
+    campaign: lọc về ĐÚNG 1 campaign (số của campaign đang xem).
+    exclude_campaign: LOẠI 1 campaign ra (dùng để tính peer average — "trung
+    bình các campaign KHÁC cùng app"). Chỉ truyền 1 trong 2 tham số này.
+    """
+    empty_result = {"cpm": None, "ctr_pct": None, "cvr_pct": None, "cpi": None, "spend": 0, "installs": 0}
+    if raw_adjust_df is None or raw_adjust_df.empty:
+        return empty_result
+
+    df = raw_adjust_df[raw_adjust_df["app"].astype(str).str.startswith(product_id, na=False)]
+    if campaign is not None:
+        df = df[df["campaign"] == campaign]
+    if exclude_campaign is not None:
+        df = df[df["campaign"] != exclude_campaign]
+    if df.empty:
+        return empty_result
+
+    cost = pd.to_numeric(df["network_cost"], errors="coerce").fillna(0).sum()
+    impressions = pd.to_numeric(df.get("network_impressions"), errors="coerce").fillna(0).sum()
+    clicks = pd.to_numeric(df.get("network_clicks"), errors="coerce").fillna(0).sum()
+    installs = pd.to_numeric(df["installs"], errors="coerce").fillna(0).sum()
     return {
-        "spend": spend,
+        "spend": cost,
         "installs": installs,
-        "cpm": (spend / impressions * 1000) if impressions else None,
+        "cpm": (cost / impressions * 1000) if impressions else None,
         "ctr_pct": (clicks / impressions * 100) if impressions else None,
         "cvr_pct": (installs / clicks * 100) if clicks else None,
-        "cpi": (spend / installs) if installs else None,
+        "cpi": (cost / installs) if installs else None,
     }
 
 
@@ -226,8 +248,8 @@ SUGGESTION_TEXT = {
     "xem lại phần onboarding.",
     "arpu_kem": "LTV (ARPU D0) thấp hơn benchmark → user vẫn ở lại nhưng KHÔNG tạo ra "
     "đủ giá trị (ít xem ads, hoặc quốc gia đang chạy có eCPM thấp) — khác với vấn đề "
-    "CPI đắt (chi phí), đây là vấn đề GIÁ TRỊ NGƯỜI DÙNG — xem thêm ở Market Board "
-    "theo quốc gia của campaign này để biết eCPM quốc gia đó có đang thấp không.",
+    "CPI đắt (chi phí), đây là vấn đề GIÁ TRỊ NGƯỜI DÙNG — xem cắt lát theo quốc gia "
+    "bên dưới để biết quốc gia nào đang kéo LTV xuống nhiều nhất.",
     "roas_kem": "ROAS D0 thấp hơn benchmark nhưng CPI và LTV riêng lẻ đều chưa rõ nguyên "
     "nhân — có thể do kết hợp cả 2 lệch nhẹ cùng lúc, xem thêm chi tiết CPI/LTV ở trên.",
 }

@@ -21,10 +21,15 @@ DETAIL_DIMENSIONS = "app,day,campaign,country"
 # từng metric (vd: ad_revenue thay vì revenue). CPI dùng ecpi_all (= network_cost
 # ÷ installs, CÙNG cơ sở installs với mọi metric khác) — KHÔNG dùng network_ecpi
 # (mẫu số là installs do network đếm, khác cơ sở, đã gây lệch ARPU trước đây).
+# network_impressions/network_clicks: THÊM 22/09/2026 — đã kiểm chứng bằng số
+# thật, Adjust CÓ SẴN 2 metric này (dữ liệu network tự báo cáo, cùng nguồn với
+# network_cost) — đủ để tự tính CPM/CTR/CVR mà KHÔNG cần BigQuery/Meta merge
+# nữa (trước đó dự án phải ghép riêng BigQuery vì tưởng Adjust không có).
 METRICS = (
     "installs,network_cost,ecpi_all,ad_revenue,"
     "roas_ad_d0,roas_ad_d7,roas_ad_d30,"
-    "retention_rate_d1,retention_rate_d7"
+    "retention_rate_d1,retention_rate_d7,"
+    "network_impressions,network_clicks"
 )
 AD_SPEND_MODE = "network"
 DAYS_BACK_DEFAULT = 7  # 7 ngày gần nhất
@@ -46,7 +51,7 @@ RATIO_COLS = [
     "retention_rate_d1",
     "retention_rate_d7",
 ]
-SUMMABLE_COLS = ["installs", "network_cost", "ad_revenue"]
+SUMMABLE_COLS = ["installs", "network_cost", "ad_revenue", "network_impressions", "network_clicks"]
 
 
 def get_date_range(days_back: int = DAYS_BACK_DEFAULT, include_today: bool = False) -> str:
@@ -147,3 +152,19 @@ def fetch_creative_summary(api_token: str, app_tokens: list, days_back: int = DA
     """Tổng hợp theo creative (cho 1 hoặc nhiều campaign) — dùng để "cắt lát
     khoanh vùng" xem creative nào đang kéo campaign xuống."""
     return call_adjust(api_token, app_tokens, CREATIVE_DIMENSIONS, days_back, **kw)
+
+
+def list_known_app_prefixes(api_token: str, app_tokens: list, days_back: int = 7, **kw) -> list:
+    """Lấy danh sách "product_id" (tiền tố trước dấu "-" trong field "app" thật
+    của Adjust, VD "AAP874" từ "AAP874-Face Warp Prank") — THAY THẾ hoàn toàn
+    bq.refresh_product_ids() (22/09/2026, đã bỏ BigQuery khỏi Cảnh báo/Xét
+    nghiệm). Gọi RIÊNG dimension="app" (giống fetch_app_totals) — rẻ, không
+    kéo cả bảng chi tiết chỉ để lấy tên app."""
+    data = call_adjust(api_token, app_tokens, "app", days_back, **kw)
+    rows = data.get("rows") or []
+    prefixes = set()
+    for row in rows:
+        app_name = row.get("app")
+        if app_name:
+            prefixes.add(app_name.split("-")[0].strip())
+    return sorted(prefixes)

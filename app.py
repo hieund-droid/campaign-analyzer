@@ -51,6 +51,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 import adjust_client as ac
+import background_capture as bgcap
 import benchmarks as bm
 import campaign_doctor as cdoc
 import campaign_snapshots as csnap
@@ -200,6 +201,29 @@ with st.sidebar:
             local_storage.deleteItem("adjust_api_token", key="del_adjust_api_token")
         if local_storage.getItem("adjust_app_tokens"):
             local_storage.deleteItem("adjust_app_tokens", key="del_adjust_app_tokens")
+
+    st.divider()
+    # KHÔNG cần tick riêng nữa (đổi 22/09/2026 theo yêu cầu user — mặc định AI
+    # CŨNG CẦN việc chụp ngầm nên bỏ hẳn bước phải tự chọn): hễ đã nhập ĐỦ API
+    # Token + App Token ở trên, tự động góp luôn vào danh sách chụp ngầm —
+    # KHÔNG âm thầm giấu (vẫn hiện rõ đang xảy ra chuyện gì, chỉ là không cần
+    # thao tác thêm). Vẫn phải GÓP THEO DANH SÁCH (không phải 1 token duy
+    # nhất) vì mỗi người chỉ xem được 1 vài app riêng — xem background_capture.py.
+    _cur_api = st.session_state.get("adjust_api_token")
+    _cur_apps = st.session_state.get("adjust_app_tokens")
+    if _cur_api and _cur_apps:
+        bgcap.add_or_update_shared_token(_cur_api, _cur_apps)
+        _shared_count = bgcap.count_shared_tokens()
+        st.caption(
+            f"☁️ Token này cũng tự động dùng để chụp snapshot ngầm mỗi 1 tiếng "
+            f"(kể cả khi không ai mở app) — hiện có {_shared_count} token đang góp."
+        )
+
+
+# Khởi động luồng chụp ngầm — CHỈ 1 lần cho CẢ TIẾN TRÌNH (không phải mỗi
+# session), tự no-op nếu đã chạy rồi. Xem background_capture.py để biết giới
+# hạn thật (không phải cron 24/7, chỉ chạy khi tiến trình Streamlit còn sống).
+bgcap.ensure_background_thread_started()
 
 
 # ══════════════════════════════════════════════════════════════════════

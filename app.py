@@ -321,6 +321,27 @@ def load_hourly_data(app_tokens_raw: str, api_token: str):
     return pd.DataFrame(rows), warning_msg
 
 
+@st.cache_data(ttl=5 * 60, show_spinner=False)
+def load_daily_today_data(app_tokens_raw: str, api_token: str):
+    """Dùng để ĐỐI CHIẾU CHÉO với load_hourly_data() (xem
+    adjust_client.fetch_daily_today() — thêm 23/09/2026, sau khi user nghi
+    ngờ số theo giờ sai): kéo tổng chi phí/installs hôm nay theo CÁCH TÍNH CŨ
+    (dimension "app,day,campaign", không có "hour"), KHÔNG dùng để hiện lên
+    UI chính — chỉ để so sánh xem 2 cách tính có khớp nhau không."""
+    if not api_token or not app_tokens_raw:
+        return None, "Thiếu API Token / App Token."
+    app_tokens = ac.parse_app_tokens(app_tokens_raw)
+    try:
+        data = ac.fetch_daily_today(api_token, app_tokens, exit_on_error=False)
+    except Exception as e:  # noqa: BLE001
+        return None, f"Lỗi gọi Adjust API: {e}"
+    warning_msg = ac.extract_warnings(data)
+    rows = data.get("rows") or []
+    if not rows:
+        return pd.DataFrame(), warning_msg
+    return pd.DataFrame(rows), warning_msg
+
+
 def weighted_kpis(df: pd.DataFrame) -> dict:
     """Tính KPI tổng hợp ĐÚNG CÁCH — không lấy trung bình/tổng trực tiếp các cột
     tỉ lệ (ecpi_all, roas_ad_dN, retention_rate_dN) vì sẽ sai (đã kiểm chứng
@@ -658,6 +679,8 @@ def page_alerts():
         st.session_state.al_warning = None
         st.session_state.al_hourly_df = None
         st.session_state.al_hourly_err = None
+        st.session_state.al_daily_today_df = None
+        st.session_state.al_daily_today_err = None
 
     if al_fetch_clicked:
         # Phần ngày ĐÃ CHỐT (không lấy hôm nay) — dùng cho trang "Xét nghiệm"
@@ -680,6 +703,12 @@ def page_alerts():
         hourly_df, hourly_err = load_hourly_data(al_app_tokens_raw, al_api_token)
         st.session_state.al_hourly_df = hourly_df
         st.session_state.al_hourly_err = hourly_err
+
+        # Kéo kèm bản "theo ngày" (cách tính CŨ, đã tin dùng từ đầu) để ĐỐI
+        # CHIẾU CHÉO — xem khối "🔍 Đối chiếu" bên dưới.
+        daily_today_df, daily_today_err = load_daily_today_data(al_app_tokens_raw, al_api_token)
+        st.session_state.al_daily_today_df = daily_today_df
+        st.session_state.al_daily_today_err = daily_today_err
 
     if st.session_state.al_err:
         st.error(f"❌ {st.session_state.al_err}")
@@ -793,6 +822,47 @@ def page_alerts():
             "network chưa kịp báo cáo chi phí mới, không phải chất lượng "
             "campaign đổi thật."
         )
+
+        with st.expander("🔍 Đối chiếu: chi phí cộng dồn theo GIỜ có khớp tổng theo NGÀY không?"):
+            st.caption(
+                "So tổng chi phí hôm nay TÍNH RA từ dữ liệu theo giờ (cách MỚI, "
+                "dùng cho bảng ở trên) với tổng chi phí hôm nay lấy TRỰC TIẾP theo "
+                "ngày (cách CŨ, đã dùng cho trang Adjust từ đầu dự án). Nếu 2 cột "
+                "KHÁC NHAU → có lỗi ở cách kéo/cộng dồn theo giờ, cần báo lại để "
+                "sửa. Nếu KHỚP NHAU → chi phí đứng yên nhiều tiếng là DỮ LIỆU THẬT "
+                "từ Adjust (network chưa báo cáo thêm), không phải lỗi công cụ."
+            )
+            if st.session_state.al_daily_today_err:
+                st.error(f"❌ {st.session_state.al_daily_today_err}")
+            else:
+                daily_today_df = st.session_state.al_daily_today_df
+                if daily_today_df is None or daily_today_df.empty:
+                    st.info("Chưa có dữ liệu để đối chiếu (chưa có installs/cost hôm nay).")
+                else:
+                    daily_today_df = daily_today_df.copy()
+                    for col in ("installs", "network_cost"):
+                        if col in daily_today_df.columns:
+                            daily_today_df[col] = pd.to_numeric(daily_today_df[col], errors="coerce").fillna(0)
+                    checked_campaigns = {f["campaign"] for f in all_flagged_today}
+                    compare_rows = []
+                    for campaign in checked_campaigns:
+                        hourly_match = cum_df_scope[cum_df_scope["campaign"] == campaign]
+                        cost_from_hourly = float(hourly_match["network_cost"].sum()) if not hourly_match.empty else 0.0
+                        daily_match = daily_today_df[daily_today_df["campaign"] == campaign]
+                        cost_from_daily = float(daily_match["network_cost"].sum()) if not daily_match.empty else 0.0
+                        compare_rows.append({
+                            "Campaign": campaign,
+                            "Chi phí hôm nay (cộng theo GIỜ)": cost_from_hourly,
+                            "Chi phí hôm nay (theo NGÀY, cách cũ)": cost_from_daily,
+                            "Khớp không?": "✅ Khớp" if abs(cost_from_hourly - cost_from_daily) < 0.01 else "❌ LỆCH",
+                        })
+                    st.dataframe(
+                        pd.DataFrame(compare_rows), width="stretch", hide_index=True,
+                        column_config={
+                            "Chi phí hôm nay (cộng theo GIỜ)": st.column_config.NumberColumn(format="$%.2f"),
+                            "Chi phí hôm nay (theo NGÀY, cách cũ)": st.column_config.NumberColumn(format="$%.2f"),
+                        },
+                    )
 
     st.divider()
     since_col1, since_col2 = st.columns([1, 3])

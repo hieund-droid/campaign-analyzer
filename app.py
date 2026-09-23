@@ -914,6 +914,26 @@ def page_alerts():
     # Lưu lại để trang "Xét nghiệm" đọc danh sách campaign đang bị cảnh báo.
     st.session_state.al_realtime_flagged = all_flagged_today
 
+    # THÊM 23/09/2026 (user hỏi "22/9 đã là hôm qua, sao vẫn chưa đủ data" —
+    # message cũ gộp chung 3 nguyên nhân KHÁC NHAU khiến không tự phân biệt
+    # được): đếm riêng từng nguyên nhân để báo ĐÚNG chỗ tắc, không bắt user
+    # đoán. 3 khả năng: (1) app này không có dòng nào cho ngày đó, (2) có
+    # dòng nhưng từng campaign chưa đủ 2 giờ khác nhau, (3) đủ giờ nhưng
+    # installs_cum cuối ngày dưới ngưỡng "Install tối thiểu" nên bị loại.
+    _diag_total_campaigns = cum_df_scope["campaign"].nunique() if not cum_df_scope.empty else 0
+    _diag_too_few_hours = 0
+    _diag_below_min_installs = 0
+    if not cum_df_scope.empty:
+        _hours_per_campaign = cum_df_scope.groupby("campaign")["hour"].nunique()
+        _enough_hours_campaigns = _hours_per_campaign[_hours_per_campaign >= 2].index
+        _diag_too_few_hours = _diag_total_campaigns - len(_enough_hours_campaigns)
+        if len(_enough_hours_campaigns):
+            _last_per_campaign = (
+                cum_df_scope[cum_df_scope["campaign"].isin(_enough_hours_campaigns)]
+                .sort_values("hour").groupby("campaign").tail(1)
+            )
+            _diag_below_min_installs = int((_last_per_campaign["installs_cum"] < al_min_installs).sum())
+
     def _flags_str(f: dict) -> str:
         flags = []
         if f["cpi_bad"]:
@@ -951,10 +971,41 @@ def page_alerts():
     _channel_map = st.session_state.get("al_campaign_channel_map", {})
 
     if not all_flagged_today:
-        st.info(
-            "Chưa campaign nào vượt ngưỡng trong 1/2/3 tiếng qua, hoặc app này "
-            f"chưa có đủ 2 giờ dữ liệu của {_date_label} (VD vừa qua nửa đêm)."
-        )
+        if _diag_total_campaigns == 0:
+            st.warning(
+                f"App **{al_product_id}** không có dòng dữ liệu campaign nào cho "
+                f"{_date_label} — kiểm tra lại App Token/App đang chọn có đúng "
+                "không, hoặc app này không chạy campaign nào hôm đó."
+            )
+        else:
+            _diag_parts = [f"Tổng {_diag_total_campaigns} campaign có dữ liệu {_date_label}."]
+            if _diag_too_few_hours:
+                _diag_parts.append(f"{_diag_too_few_hours} campaign chưa đủ 2 giờ khác nhau (VD chỉ chạy đúng 1 giờ).")
+            _diag_enough = _diag_total_campaigns - _diag_too_few_hours
+            if _diag_enough:
+                if _diag_below_min_installs == _diag_enough:
+                    _diag_parts.append(
+                        f"CẢ {_diag_enough} campaign đủ giờ đều có installs cuối ngày DƯỚI "
+                        f"ngưỡng \"Install tối thiểu\" ({int(al_min_installs)}) nên bị loại hết "
+                        "— thử giảm ngưỡng này nếu muốn xem."
+                    )
+                elif _diag_below_min_installs:
+                    _diag_parts.append(
+                        f"{_diag_below_min_installs}/{_diag_enough} campaign đủ giờ bị loại vì "
+                        f"installs cuối ngày dưới ngưỡng \"Install tối thiểu\" ({int(al_min_installs)})."
+                    )
+                    _diag_parts.append(
+                        f"Số còn lại ({_diag_enough - _diag_below_min_installs} campaign) đủ điều "
+                        f"kiện nhưng ROAS D0 không đổi quá {int(al_realtime_pct)}% ở bất kỳ mốc "
+                        "1/2/3/6 tiếng nào."
+                    )
+                else:
+                    _diag_parts.append(
+                        f"Không campaign nào có ROAS D0 đổi quá {int(al_realtime_pct)}% ở bất kỳ "
+                        "mốc 1/2/3/6 tiếng nào — thử giảm \"Mức ROAS D0 giảm cần báo động\" nếu "
+                        "muốn nhạy hơn."
+                    )
+            st.info(" ".join(_diag_parts))
     else:
         realtime_rows = [
             {

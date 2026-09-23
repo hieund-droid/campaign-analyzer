@@ -253,30 +253,6 @@ def fetch_campaign_channel_map(api_token: str, app_tokens: list, **kw) -> dict:
     )
 
 
-def fetch_daily_today(api_token: str, app_tokens: list, **kw) -> dict:
-    """THÊM 23/09/2026 — dùng để ĐỐI CHIẾU CHÉO với fetch_hourly_today(): kéo
-    TỔNG chi phí/installs hôm nay theo dimension "app,day,campaign" (CÁCH TÍNH
-    CŨ, đã tin dùng từ đầu dự án cho trang Adjust — KHÔNG dùng "hour"). Nếu
-    tổng chi phí cộng dồn từ fetch_hourly_today() KHÔNG khớp con số ở đây, đó
-    là bằng chứng có bug trong cách Adjust trả/chia dữ liệu theo "hour" (hoặc
-    trong cách mình cộng dồn) — nếu KHỚP, nghĩa là "chi phí đứng yên nhiều
-    tiếng" phản ánh ĐÚNG dữ liệu Adjust có (network chưa báo cáo thêm), không
-    phải lỗi tính toán của tool."""
-    return call_adjust(
-        api_token, app_tokens, DETAIL_DIMENSIONS_NO_COUNTRY, days_back=1,
-        include_today=True, **kw
-    )
-
-
-def fetch_daily_for_date(api_token: str, app_tokens: list, date_str: str, **kw) -> dict:
-    """Như fetch_daily_today() nhưng cho 1 NGÀY CỤ THỂ (date_str "YYYY-MM-DD")
-    — dùng đối chiếu chéo với fetch_hourly_for_date() của CÙNG ngày đó."""
-    return call_adjust(
-        api_token, app_tokens, DETAIL_DIMENSIONS_NO_COUNTRY, days_back=1,
-        include_today=True, extra_params={"date_period": f"{date_str}:{date_str}"}, **kw
-    )
-
-
 def fetch_campaign_country_summary(
     api_token: str, app_tokens: list, campaign: str, days_back: int = DAYS_BACK_DEFAULT, **kw
 ) -> dict:

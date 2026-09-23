@@ -49,6 +49,7 @@ Theme màu ở `.streamlit/config.toml` (không chứa gì bí mật, được c
 """
 
 import os
+from datetime import date, timedelta
 
 import pandas as pd
 import streamlit as st
@@ -302,19 +303,23 @@ def load_campaign_country_data(campaign: str, days_back: int, app_tokens_raw: st
 
 
 @st.cache_data(ttl=5 * 60, show_spinner="Đang lấy dữ liệu theo giờ hôm nay...")
-def load_hourly_data(app_tokens_raw: str, api_token: str, ad_spend_mode: str = "network"):
-    """Dùng cho "Cảnh báo trong ngày" — kéo dimension "hour" của HÔM NAY (xem
-    intraday_alerts.py). TTL ngắn hơn các loader khác (5 phút thay vì 15) vì
-    mục đích của trang này là bắt biến động NHANH trong ngày, cần dữ liệu tươi
-    hơn. ad_spend_mode: "network" (mặc định, chính xác nhưng Meta chỉ pull 1
-    lần/ngày) hoặc "adjust" (gần thời gian thực hơn nhưng có thể thiếu sót —
-    xem docstring adjust_client.fetch_hourly_today()). LÀ THAM SỐ HÀM (không
-    đọc ngầm) để cache tự làm mới đúng khi user đổi lựa chọn."""
+def load_hourly_data(app_tokens_raw: str, api_token: str, date_str: str, ad_spend_mode: str = "network"):
+    """Dùng cho "Cảnh báo trong ngày" — kéo dimension "hour" của 1 NGÀY CỤ THỂ
+    (date_str "YYYY-MM-DD", có thể là hôm nay HOẶC 1 ngày đã qua — THÊM
+    23/09/2026 theo yêu cầu user: "tạm dùng số ngày hôm trước" trong lúc chờ
+    Meta API, vì ngày ĐÃ CHỐT có chi phí đáng tin hơn "hôm nay" — xem
+    adjust_client.fetch_hourly_for_date()). TTL ngắn hơn các loader khác (5
+    phút thay vì 15) — dù với ngày quá khứ dữ liệu không đổi nữa, giữ TTL
+    ngắn cho nhất quán + vẫn hữu ích khi xem "hôm nay". ad_spend_mode:
+    "network" (mặc định, chính xác nhưng Meta chỉ pull 1 lần/ngày) hoặc
+    "adjust" (gần thời gian thực hơn nhưng có thể thiếu sót). date_str/
+    ad_spend_mode LÀ THAM SỐ HÀM (không đọc ngầm) để cache tự làm mới đúng
+    khi user đổi lựa chọn."""
     if not api_token or not app_tokens_raw:
         return None, "Thiếu API Token / App Token."
     app_tokens = ac.parse_app_tokens(app_tokens_raw)
     try:
-        data = ac.fetch_hourly_today(api_token, app_tokens, ad_spend_mode=ad_spend_mode, exit_on_error=False)
+        data = ac.fetch_hourly_for_date(api_token, app_tokens, date_str, ad_spend_mode=ad_spend_mode, exit_on_error=False)
     except Exception as e:  # noqa: BLE001
         return None, f"Lỗi gọi Adjust API: {e}"
     warning_msg = ac.extract_warnings(data)
@@ -325,17 +330,17 @@ def load_hourly_data(app_tokens_raw: str, api_token: str, ad_spend_mode: str = "
 
 
 @st.cache_data(ttl=5 * 60, show_spinner=False)
-def load_daily_today_data(app_tokens_raw: str, api_token: str):
+def load_daily_for_date_data(app_tokens_raw: str, api_token: str, date_str: str):
     """Dùng để ĐỐI CHIẾU CHÉO với load_hourly_data() (xem
-    adjust_client.fetch_daily_today() — thêm 23/09/2026, sau khi user nghi
-    ngờ số theo giờ sai): kéo tổng chi phí/installs hôm nay theo CÁCH TÍNH CŨ
-    (dimension "app,day,campaign", không có "hour"), KHÔNG dùng để hiện lên
-    UI chính — chỉ để so sánh xem 2 cách tính có khớp nhau không."""
+    adjust_client.fetch_daily_for_date() — thêm 23/09/2026, sau khi user nghi
+    ngờ số theo giờ sai): kéo tổng chi phí/installs của ĐÚNG 1 NGÀY theo CÁCH
+    TÍNH CŨ (dimension "app,day,campaign", không có "hour"), KHÔNG dùng để
+    hiện lên UI chính — chỉ để so sánh xem 2 cách tính có khớp nhau không."""
     if not api_token or not app_tokens_raw:
         return None, "Thiếu API Token / App Token."
     app_tokens = ac.parse_app_tokens(app_tokens_raw)
     try:
-        data = ac.fetch_daily_today(api_token, app_tokens, exit_on_error=False)
+        data = ac.fetch_daily_for_date(api_token, app_tokens, date_str, exit_on_error=False)
     except Exception as e:  # noqa: BLE001
         return None, f"Lỗi gọi Adjust API: {e}"
     warning_msg = ac.extract_warnings(data)
@@ -752,6 +757,20 @@ def page_alerts():
             list(AL_DATE_PRESETS.keys()), index=2, key="al_date",
         )
         al_days_back = AL_DATE_PRESETS[al_date_choice]
+
+    # THÊM 23/09/2026 (theo yêu cầu user — tạm dùng số ngày hôm trước trong
+    # lúc chờ Meta API): mặc định NGÀY HÔM QUA (đã chốt, chi phí đáng tin hơn
+    # "hôm nay" — xem GHI_CHU_TIEN_DO.md), nhưng vẫn cho chọn "Hôm nay" hoặc
+    # bất kỳ ngày nào khác trong quá khứ để xem lại diễn biến trong ngày đó.
+    al_view_date = st.date_input(
+        "Xem diễn biến TRONG NGÀY của ngày nào?",
+        value=date.today() - timedelta(days=1),
+        max_value=date.today(),
+        key="al_view_date",
+        help="Mặc định hôm qua — ngày ĐÃ CHỐT thì chi phí đáng tin hơn \"hôm "
+        "nay\" (Adjust chỉ pull lại chi phí Facebook 1 lần/ngày, hôm nay có "
+        "thể chưa pull kịp). Chọn \"hôm nay\" nếu vẫn muốn xem số đang chạy.",
+    )
     al_fetch_clicked = st.button("Apply", type="primary", key="al_fetch")
 
     al_min_installs = st.number_input(
@@ -791,6 +810,7 @@ def page_alerts():
         st.session_state.al_daily_today_df = None
         st.session_state.al_daily_today_err = None
         st.session_state.al_campaign_channel_map = {}
+        st.session_state.al_view_date_used = None
 
     if al_fetch_clicked:
         # Phần ngày ĐÃ CHỐT (không lấy hôm nay) — dùng cho trang "Xét nghiệm"
@@ -810,16 +830,18 @@ def page_alerts():
             st.session_state.al_product_used = al_product_id
             st.session_state.al_days_back_used = al_days_back
 
-        hourly_df, hourly_err = load_hourly_data(al_app_tokens_raw, al_api_token, ad_spend_mode=al_spend_mode)
+        al_view_date_str = al_view_date.isoformat()
+        hourly_df, hourly_err = load_hourly_data(al_app_tokens_raw, al_api_token, al_view_date_str, ad_spend_mode=al_spend_mode)
         st.session_state.al_hourly_df = hourly_df
         st.session_state.al_hourly_err = hourly_err
         st.session_state.al_spend_mode_used = al_spend_mode
+        st.session_state.al_view_date_used = al_view_date_str
 
         # Kéo kèm bản "theo ngày" (cách tính CŨ, đã tin dùng từ đầu) để ĐỐI
         # CHIẾU CHÉO — xem khối "🔍 Đối chiếu" bên dưới. LUÔN dùng "network"
         # (mặc định) cho bản đối chiếu này dù trên đang thử mode nào — vì mục
         # đích của bản này là làm "đối chứng cố định", đổi theo sẽ mất tác dụng.
-        daily_today_df, daily_today_err = load_daily_today_data(al_app_tokens_raw, al_api_token)
+        daily_today_df, daily_today_err = load_daily_for_date_data(al_app_tokens_raw, al_api_token, al_view_date_str)
         st.session_state.al_daily_today_df = daily_today_df
         st.session_state.al_daily_today_err = daily_today_err
 
@@ -848,16 +870,25 @@ def page_alerts():
     if st.session_state.al_hourly_err:
         st.error(f"❌ Không lấy được dữ liệu theo giờ: {st.session_state.al_hourly_err}")
 
-    st.subheader("⚡ Cảnh báo trong ngày (thời gian thực)")
+    _view_date_iso = st.session_state.get("al_view_date_used")
+    _is_today_view = _view_date_iso == date.today().isoformat()
+    _date_label = "hôm nay" if _is_today_view else (
+        f"ngày {date.fromisoformat(_view_date_iso).strftime('%d/%m/%Y')}" if _view_date_iso else "ngày đã chọn"
+    )
+    _now_or_end_label = "Bây giờ" if _is_today_view else "Cuối ngày"
+
+    st.subheader(f"⚡ Cảnh báo trong ngày — {_date_label}")
     st.caption(
-        "So với các mốc ~1/2/3/6 tiếng trước — lấy TRỰC TIẾP lịch sử theo GIỜ "
-        "từ Adjust (không cần ai mở app đúng lúc để \"chụp\" số như trước, luôn "
-        "có dữ liệu ngay khi bấm Apply). **Gắn cờ dựa vào ROAS D0** (đổi "
-        "23/09/2026) — CPI/LTV vẫn hiện để GIẢI THÍCH ROAS đổi vì chi phí đắt "
-        "lên hay vì giá trị user tụt, nhưng KHÔNG dùng CPI/LTV để tự quyết định "
-        "cảnh báo nữa (2 chỉ số này rất hay đổi % y hệt nhau chỉ vì installs "
-        "tăng trong khi Adjust chưa cập nhật chi phí — không phản ánh chất "
-        "lượng campaign đổi thật, xem GHI_CHU_TIEN_DO.md)."
+        f"So với các mốc ~1/2/3/6 tiếng trước TRONG {_date_label.upper()} — lấy "
+        "TRỰC TIẾP lịch sử theo GIỜ từ Adjust (không cần ai mở app đúng lúc để "
+        "\"chụp\" số như trước, luôn có dữ liệu ngay khi bấm Apply — xem ngày "
+        "hôm qua/trước nữa thì chi phí đã chốt xong, đáng tin hơn hôm nay). "
+        "**Gắn cờ dựa vào ROAS D0** (đổi 23/09/2026) — CPI/LTV vẫn hiện để "
+        "GIẢI THÍCH ROAS đổi vì chi phí đắt lên hay vì giá trị user tụt, nhưng "
+        "KHÔNG dùng CPI/LTV để tự quyết định cảnh báo nữa (2 chỉ số này rất hay "
+        "đổi % y hệt nhau chỉ vì installs tăng trong khi Adjust chưa cập nhật "
+        "chi phí — không phản ánh chất lượng campaign đổi thật, xem "
+        "GHI_CHU_TIEN_DO.md)."
     )
     al_realtime_pct = st.number_input(
         "Mức ROAS D0 giảm cần báo động (%)",
@@ -868,7 +899,7 @@ def page_alerts():
 
     hourly_df = st.session_state.al_hourly_df
     if hourly_df is None or hourly_df.empty:
-        st.info("Chưa có dữ liệu theo giờ hôm nay cho token này — bấm Apply để tải.")
+        st.info(f"Chưa có dữ liệu theo giờ cho {_date_label} với token này — bấm Apply để tải.")
         st.session_state.al_realtime_flagged = []
         return
 
@@ -922,7 +953,7 @@ def page_alerts():
     if not all_flagged_today:
         st.info(
             "Chưa campaign nào vượt ngưỡng trong 1/2/3 tiếng qua, hoặc app này "
-            "chưa có đủ 2 giờ dữ liệu hôm nay (VD vừa qua nửa đêm)."
+            f"chưa có đủ 2 giờ dữ liệu của {_date_label} (VD vừa qua nửa đêm)."
         )
     else:
         realtime_rows = [
@@ -931,7 +962,7 @@ def page_alerts():
                 "Nguồn": _channel_map.get(f["campaign"], "?"),
                 "So với ~mấy tiếng trước": f"{f['actual_hours_gap']:.1f}h",
                 "Lúc đó": f["baseline_ts"][11:16],
-                "Bây giờ": f["latest_ts"][11:16],
+                _now_or_end_label: f["latest_ts"][11:16],
                 "CPI % đổi": f["cpi_pct_change"],
                 "LTV (ARPU D0) % đổi": f["arpu_d0_pct_change"],
                 "ROAS D0 % đổi": f["roas_d0_pct_change"],
@@ -970,19 +1001,20 @@ def page_alerts():
                 )
             else:
                 st.caption(
-                    "So tổng chi phí hôm nay TÍNH RA từ dữ liệu theo giờ (cách MỚI, "
-                    "dùng cho bảng ở trên) với tổng chi phí hôm nay lấy TRỰC TIẾP theo "
-                    "ngày (cách CŨ, đã dùng cho trang Adjust từ đầu dự án). Nếu 2 cột "
-                    "KHÁC NHAU → có lỗi ở cách kéo/cộng dồn theo giờ, cần báo lại để "
-                    "sửa. Nếu KHỚP NHAU → chi phí đứng yên nhiều tiếng là DỮ LIỆU THẬT "
-                    "từ Adjust (network chưa báo cáo thêm), không phải lỗi công cụ."
+                    f"So tổng chi phí của {_date_label} TÍNH RA từ dữ liệu theo giờ "
+                    "(cách MỚI, dùng cho bảng ở trên) với tổng chi phí lấy TRỰC TIẾP "
+                    "theo ngày (cách CŨ, đã dùng cho trang Adjust từ đầu dự án). Nếu "
+                    "2 cột KHÁC NHAU → có lỗi ở cách kéo/cộng dồn theo giờ, cần báo "
+                    "lại để sửa. Nếu KHỚP NHAU → chi phí đứng yên nhiều tiếng là DỮ "
+                    "LIỆU THẬT từ Adjust (network chưa báo cáo thêm), không phải lỗi "
+                    "công cụ."
                 )
             if st.session_state.al_daily_today_err:
                 st.error(f"❌ {st.session_state.al_daily_today_err}")
             else:
                 daily_today_df = st.session_state.al_daily_today_df
                 if daily_today_df is None or daily_today_df.empty:
-                    st.info("Chưa có dữ liệu để đối chiếu (chưa có installs/cost hôm nay).")
+                    st.info(f"Chưa có dữ liệu để đối chiếu (chưa có installs/cost của {_date_label}).")
                 else:
                     daily_today_df = daily_today_df.copy()
                     for col in ("installs", "network_cost"):
@@ -997,15 +1029,15 @@ def page_alerts():
                         cost_from_daily = float(daily_match["network_cost"].sum()) if not daily_match.empty else 0.0
                         compare_rows.append({
                             "Campaign": campaign,
-                            "Chi phí hôm nay (cộng theo GIỜ)": cost_from_hourly,
-                            "Chi phí hôm nay (theo NGÀY, cách cũ)": cost_from_daily,
+                            "Chi phí (cộng theo GIỜ)": cost_from_hourly,
+                            "Chi phí (theo NGÀY, cách cũ)": cost_from_daily,
                             "Khớp không?": "✅ Khớp" if abs(cost_from_hourly - cost_from_daily) < 0.01 else "❌ LỆCH",
                         })
                     st.dataframe(
                         pd.DataFrame(compare_rows), width="stretch", hide_index=True,
                         column_config={
-                            "Chi phí hôm nay (cộng theo GIỜ)": st.column_config.NumberColumn(format="$%.2f"),
-                            "Chi phí hôm nay (theo NGÀY, cách cũ)": st.column_config.NumberColumn(format="$%.2f"),
+                            "Chi phí (cộng theo GIỜ)": st.column_config.NumberColumn(format="$%.2f"),
+                            "Chi phí (theo NGÀY, cách cũ)": st.column_config.NumberColumn(format="$%.2f"),
                         },
                     )
 
@@ -1013,28 +1045,28 @@ def page_alerts():
     since_col1, since_col2 = st.columns([1, 3])
     with since_col1:
         al_since_hour = st.number_input(
-            "So với giờ nào hôm nay?", min_value=0, max_value=23, value=8, step=1,
+            f"So với giờ nào của {_date_label}?", min_value=0, max_value=23, value=8, step=1,
             key="al_since_hour",
-            help="VD 8 = so với ~8h sáng hôm nay. Mặc định 0h (nửa đêm) không "
-            "hữu ích vì gần như chưa có hoạt động gì để so sánh.",
+            help="VD 8 = so với ~8h sáng. Mặc định 0h (nửa đêm) không hữu ích "
+            "vì gần như chưa có hoạt động gì để so sánh.",
         )
     with since_col2:
         st.write("")
-        st.caption(f"Xem thêm: so với ~{int(al_since_hour):02d}h00 hôm nay (tự chọn giờ ở ô bên trái).")
+        st.caption(f"Xem thêm: so với ~{int(al_since_hour):02d}h00 của {_date_label} (tự chọn giờ ở ô bên trái).")
 
     all_flagged_since_hour = ia.list_flagged_since_hour(
         cum_df_scope, baseline_hour_of_day=int(al_since_hour),
         threshold_pct=float(al_realtime_pct), min_installs=int(al_min_installs),
     )
     if not all_flagged_since_hour:
-        st.caption(f"Chưa có gì vượt ngưỡng so với ~{int(al_since_hour):02d}h00 hôm nay.")
+        st.caption(f"Chưa có gì vượt ngưỡng so với ~{int(al_since_hour):02d}h00 của {_date_label}.")
     else:
         since_hour_rows = [
             {
                 "Campaign": f["campaign"],
                 "Nguồn": _channel_map.get(f["campaign"], "?"),
                 f"Lúc ~{int(al_since_hour):02d}h": f["baseline_ts"][11:16],
-                "Bây giờ": f["latest_ts"][11:16],
+                _now_or_end_label: f["latest_ts"][11:16],
                 "CPI % đổi": f["cpi_pct_change"],
                 "LTV (ARPU D0) % đổi": f["arpu_d0_pct_change"],
                 "ROAS D0 % đổi": f["roas_d0_pct_change"],

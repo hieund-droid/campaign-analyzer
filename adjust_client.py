@@ -214,6 +214,30 @@ def fetch_hourly_today(api_token: str, app_tokens: list, ad_spend_mode: str | No
     )
 
 
+def fetch_hourly_for_date(api_token: str, app_tokens: list, date_str: str, ad_spend_mode: str | None = None, **kw) -> dict:
+    """THÊM 23/09/2026 (theo yêu cầu user — tạm dùng số ngày hôm trước trong
+    lúc chờ Meta API): kéo dữ liệu THEO GIỜ cho 1 NGÀY CỤ THỂ trong quá khứ
+    (date_str dạng "YYYY-MM-DD"), KHÔNG ép "hôm nay" như fetch_hourly_today().
+
+    Vì sao dùng ngày ĐÃ QUA đáng tin hơn "hôm nay": chi phí Facebook qua
+    Adjust chỉ pull lại 1 LẦN/NGÀY (đã kiểm chứng, xem GHI_CHU_TIEN_DO.md) —
+    với 1 ngày ĐÃ CHỐT (đã qua ít nhất 1 ngày), chi phí đã có đủ thời gian để
+    Adjust pull xong đầy đủ, không còn bị "đứng yên" như khi xem "hôm nay"
+    (vẫn đang chạy dở, chưa chắc đã pull xong).
+
+    Kỹ thuật: ghi đè thẳng "date_period" qua extra_params (đã kiểm chứng bằng
+    số thật: date_period="2026-09-20:2026-09-20" trả đúng 24 dòng theo giờ
+    của ĐÚNG ngày đó) — days_back/include_today truyền cho call_adjust() chỉ
+    là giá trị placeholder, bị ghi đè ngay bởi date_period trong extra_params."""
+    extra_params = {"date_period": f"{date_str}:{date_str}"}
+    if ad_spend_mode:
+        extra_params["ad_spend_mode"] = ad_spend_mode
+    return call_adjust(
+        api_token, app_tokens, DETAIL_DIMENSIONS_HOURLY, days_back=1,
+        include_today=True, extra_params=extra_params, **kw
+    )
+
+
 def fetch_campaign_channel_map(api_token: str, app_tokens: list, **kw) -> dict:
     """THÊM 23/09/2026 — cho biết mỗi campaign chạy qua NETWORK nào (dimension
     "channel", VD "Facebook", "Organic", "Google Ads"...). Dùng để trả lời câu
@@ -241,6 +265,15 @@ def fetch_daily_today(api_token: str, app_tokens: list, **kw) -> dict:
     return call_adjust(
         api_token, app_tokens, DETAIL_DIMENSIONS_NO_COUNTRY, days_back=1,
         include_today=True, **kw
+    )
+
+
+def fetch_daily_for_date(api_token: str, app_tokens: list, date_str: str, **kw) -> dict:
+    """Như fetch_daily_today() nhưng cho 1 NGÀY CỤ THỂ (date_str "YYYY-MM-DD")
+    — dùng đối chiếu chéo với fetch_hourly_for_date() của CÙNG ngày đó."""
+    return call_adjust(
+        api_token, app_tokens, DETAIL_DIMENSIONS_NO_COUNTRY, days_back=1,
+        include_today=True, extra_params={"date_period": f"{date_str}:{date_str}"}, **kw
     )
 
 

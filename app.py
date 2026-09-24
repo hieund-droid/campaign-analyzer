@@ -853,11 +853,32 @@ def page_alerts():
     # "AAP874-Face Warp Prank", product_id là phần trước dấu "-".
     cum_df_scope = cum_df[cum_df["app"].str.startswith(al_product_id)]
 
-    st.caption("Installs theo giờ (cả app, mọi campaign cộng lại):")
-    _installs_by_hour = cum_df_scope.groupby("hour")["installs"].sum().sort_index()
-    if not _installs_by_hour.empty:
-        _installs_by_hour.index = [h[11:16] for h in _installs_by_hour.index]
-        st.bar_chart(_installs_by_hour)
+    # LTV theo giờ dùng số PHÁT SINH TRONG giờ đó (KHÔNG cộng dồn) — khác cách
+    # tính LTV dùng để gắn cờ cảnh báo bên dưới (vốn CỘNG DỒN từ đầu ngày).
+    # Sum-then-divide đúng cách (cộng installs + ad_revenue riêng theo giờ,
+    # rồi mới chia — KHÔNG lấy trung bình cộng qua các campaign). Chỉ đáng
+    # tin khi xem NGÀY ĐÃ QUA khá lâu (mọi giờ trong ngày đó đã "chín" gần
+    # bằng nhau) — xem "hôm nay" sẽ THẤY GIẢM DẦN GIẢ (giờ càng gần hiện tại,
+    # doanh thu càng chưa kịp phát sinh, không phải chất lượng user tệ hơn).
+    _hourly_totals = cum_df_scope.groupby("hour")[["installs", "ad_revenue"]].sum().sort_index()
+    _hourly_totals["ltv"] = _hourly_totals["ad_revenue"] / _hourly_totals["installs"].replace(0, pd.NA)
+    _hourly_totals.index = [h[11:16] for h in _hourly_totals.index]
+
+    chart_col1, chart_col2 = st.columns(2)
+    with chart_col1:
+        st.caption("Installs theo giờ (cả app, mọi campaign cộng lại):")
+        if not _hourly_totals.empty:
+            st.bar_chart(_hourly_totals[["installs"]])
+    with chart_col2:
+        st.caption("LTV theo giờ (= doanh thu ads ÷ installs phát sinh trong giờ đó):")
+        if _is_today_view:
+            st.caption(
+                "⚠️ Đang xem HÔM NAY — biểu đồ này sẽ tự nhiên giảm dần về cuối "
+                "ngày (installs mới chưa kịp sinh doanh thu), KHÔNG phản ánh chất "
+                "lượng user tệ đi. Chỉ đáng tin khi xem 1 ngày ĐÃ QUA khá lâu."
+            )
+        if not _hourly_totals.empty:
+            st.line_chart(_hourly_totals[["ltv"]])
 
     all_flagged_today = ia.list_flagged_hours_ago(
         cum_df_scope, threshold_pct=float(al_realtime_pct), min_installs=int(al_min_installs)

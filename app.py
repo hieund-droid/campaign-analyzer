@@ -1324,9 +1324,27 @@ def page_campaign_doctor():
                         "ảnh hưởng tới kết luận."
                     )
 
+            # THÊM 24/09/2026 (user chỉ ra giải thích/gợi ý cũ "quá chung
+            # chung, không mang lại giá trị gì"): thay câu canned dùng chung
+            # ("LTV thấp hơn benchmark ở (các) thị trường chính...") bằng chẩn
+            # đoán CỤ THỂ cho TỪNG thị trường — nêu tên, số thực tế/% lệch
+            # benchmark, thị trường đó chiếm bao nhiêu % ngân sách/install của
+            # cả campaign để biết nên xử lý RIÊNG thị trường đó hay phải xem
+            # lại CẢ campaign (xem docstring cdoc.build_top_market_findings()).
+            market_findings = cdoc.build_top_market_findings(
+                top_df, stats["installs"], stats["network_cost"]
+            )
+            if market_findings:
+                st.divider()
+                st.subheader("Chi tiết theo từng thị trường có vấn đề")
+                for f in market_findings:
+                    _finding_text = cdoc.describe_market_finding(f)
+                    st.markdown(f"- 🔴 {_finding_text}")
+                    suggestions.append(_finding_text)
+
             if any_cpi_dat:
                 st.divider()
-                st.subheader("Vì sao CPI đắt? (so với các campaign khác cùng app)")
+                st.subheader("Đào sâu CPI đắt: so CPM/CTR/CVR với các campaign khác cùng app")
                 st.caption(
                     "CPM/CTR/CVR tính từ network_impressions/network_clicks của Adjust "
                     "(network tự báo cáo, cùng nguồn với network_cost) — không cần BigQuery."
@@ -1356,16 +1374,6 @@ def page_campaign_doctor():
                             suggestions.append(cdoc.SUGGESTION_TEXT[label])
                     else:
                         st.caption("CPM/CTR/CVR không lệch rõ rệt so với các campaign khác — CPI đắt có thể do nguyên nhân khác (VD cạnh tranh chung toàn thị trường).")
-
-            if any_ltv_kem:
-                st.divider()
-                st.subheader("Vì sao LTV thấp?")
-                st.markdown(
-                    "- 🔴 **LTV (ARPU D0) thấp hơn benchmark** ở (các) thị trường chính "
-                    "trong bảng trên — vấn đề GIÁ TRỊ NGƯỜI DÙNG (user vẫn cài nhưng "
-                    "không tạo đủ giá trị ở đúng thị trường đó)."
-                )
-                suggestions.append(cdoc.SUGGESTION_TEXT["arpu_kem"])
 
     if suggestions:
         st.divider()

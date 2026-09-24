@@ -242,6 +242,99 @@ def country_slice(
     return df[cols].sort_values("ROAS D0").reset_index(drop=True)
 
 
+def build_top_market_findings(top_df: pd.DataFrame, total_installs: float, total_cost: float) -> list:
+    """THÊM 24/09/2026 (user chỉ ra giải thích/gợi ý cũ "quá chung chung,
+    không mang lại giá trị gì" — VD "LTV thấp hơn benchmark ở (các) thị
+    trường chính" mà không nói RÕ thị trường nào, thấp bao nhiêu, thị trường
+    đó quan trọng cỡ nào với campaign): với MỖI thị trường trong `top_df`
+    (kết quả `top_markets_slice()`) đang bị cờ CPI đắt và/hoặc LTV thấp, tính
+    thêm NGỮ CẢNH CỤ THỂ để biết PHẢI LÀM GÌ:
+    - `install_share_pct`/`spend_share_pct`: thị trường đó chiếm bao nhiêu %
+      install/ngân sách của CẢ campaign — quyết định nên xử lý RIÊNG thị
+      trường này (chiếm ít) hay phải xem lại CẢ campaign (chiếm nhiều, là thị
+      trường CHÍNH, cắt sẽ ảnh hưởng lớn tới volume/doanh thu).
+    Trả về list dict, sắp theo `spend_share_pct` giảm dần (thị trường ảnh
+    hưởng nhiều nhất tới campaign lên đầu — đáng ưu tiên xử lý trước)."""
+    if top_df is None or top_df.empty:
+        return []
+    rows = []
+    for _, r in top_df.iterrows():
+        canh_bao = r.get("Cảnh báo") or ""
+        cpi_dat = "CPI đắt" in canh_bao
+        ltv_kem = "LTV thấp" in canh_bao
+        if not (cpi_dat or ltv_kem):
+            continue
+        rows.append({
+            "country": r["Quốc gia"],
+            "cpi_dat": cpi_dat,
+            "ltv_kem": ltv_kem,
+            "cpi_actual": r.get("CPI"),
+            "cpi_pct_vs_bench": r.get("CPI so benchmark"),
+            "ltv_actual": r.get("LTV (ARPU D0)"),
+            "ltv_pct_vs_bench": r.get("LTV so benchmark"),
+            "retention_d1": r.get("Retention D1"),
+            "installs": r.get("Installs"),
+            "spend": r.get("Chi tiêu"),
+            "install_share_pct": (r.get("Installs") / total_installs * 100) if total_installs else None,
+            "spend_share_pct": (r.get("Chi tiêu") / total_cost * 100) if total_cost else None,
+        })
+    rows.sort(key=lambda x: x["spend_share_pct"] if x["spend_share_pct"] is not None else -1, reverse=True)
+    return rows
+
+
+# Ngưỡng % ngân sách để coi 1 thị trường là "thị trường CHÍNH" của campaign
+# (không nên cắt vội) so với "thị trường phụ" (xử lý riêng, ít ảnh hưởng tổng
+# thể) — chọn 30% làm mốc hợp lý (1 thị trường chiếm gần/hơn 1/3 ngân sách
+# xứng đáng gọi là trụ cột của campaign).
+MAIN_MARKET_SPEND_SHARE_PCT = 30.0
+
+
+def describe_market_finding(f: dict) -> str:
+    """Build 1 câu chẩn đoán + gợi ý hành động CỤ THỂ (dùng ĐÚNG số của chính
+    thị trường đó, không phải câu canned chung cho mọi trường hợp) từ 1 dict
+    của `build_top_market_findings()`."""
+    parts = []
+    if f["cpi_dat"] and f.get("cpi_actual") is not None and f.get("cpi_pct_vs_bench") is not None:
+        parts.append(
+            f"CPI thực tế ${f['cpi_actual']:.4f} — CAO HƠN benchmark {f['cpi_pct_vs_bench']:.0f}%"
+        )
+    if f["ltv_kem"] and f.get("ltv_actual") is not None and f.get("ltv_pct_vs_bench") is not None:
+        parts.append(
+            f"LTV (ARPU D0) thực tế ${f['ltv_actual']:.4f} — THẤP HƠN benchmark "
+            f"{abs(f['ltv_pct_vs_bench']):.0f}%"
+        )
+    problem = " VÀ ".join(parts) if parts else "đang có vấn đề so với benchmark"
+
+    share_txt = ""
+    if f.get("spend_share_pct") is not None:
+        share_txt = (
+            f" (chiếm {f['spend_share_pct']:.0f}% ngân sách, "
+            f"{f['install_share_pct']:.0f}% install của cả campaign)"
+        )
+
+    if f.get("spend_share_pct") is not None and f["spend_share_pct"] >= MAIN_MARKET_SPEND_SHARE_PCT:
+        action = (
+            "đây là thị trường CHÍNH của campaign — KHÔNG nên cắt ngân sách vội, "
+            "ưu tiên xem lại creative/targeting cho ĐÚNG thị trường này trước"
+        )
+    elif f.get("spend_share_pct") is not None:
+        action = (
+            "thị trường phụ, ảnh hưởng ít tới tổng thể campaign — cân nhắc "
+            "GIẢM/TẮT ngân sách RIÊNG cho thị trường này thay vì tối ưu cả campaign"
+        )
+    else:
+        action = "xem lại creative/targeting cho đúng thị trường này"
+
+    retention_txt = ""
+    if f.get("retention_d1") is not None:
+        retention_txt = (
+            f" Retention D1 thực tế {f['retention_d1'] * 100:.1f}% (chưa có benchmark "
+            "riêng để so, chỉ để tham khảo thêm)."
+        )
+
+    return f"**{f['country']}**: {problem}{share_txt} — {action}.{retention_txt}"
+
+
 def top_markets_slice(
     campaign_country_df: pd.DataFrame,
     benchmark_by_country: dict | None = None,

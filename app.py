@@ -1275,6 +1275,7 @@ def page_campaign_doctor():
             st.dataframe(
                 top_df, width="stretch", hide_index=True,
                 column_config={
+                    "Chi tiêu": st.column_config.NumberColumn(format="$%.2f"),
                     "Doanh thu": st.column_config.NumberColumn(format="$%.2f"),
                     "CPI": st.column_config.NumberColumn(format="$%.4f"),
                     "LTV (ARPU D0)": st.column_config.NumberColumn(format="$%.4f"),
@@ -1306,12 +1307,17 @@ def page_campaign_doctor():
                         "ổn dù thị trường chính ở trên đang có vấn đề — doanh thu \"lạ\" "
                         "ngoài thị trường mục tiêu (user đổi vị trí sau khi cài, hoặc "
                         "Adjust gán quốc gia theo nơi PHÁT SINH sự kiện thay vì nơi cài) "
-                        "đang bù vào, KHÔNG PHẢI vì thị trường chính đang tốt thật."
+                        "đang bù vào, KHÔNG PHẢI vì thị trường chính đang tốt thật. Các "
+                        "quốc gia này KHÔNG có install nên KHÔNG được đưa vào bảng/chẩn "
+                        "đoán/gợi ý ở trên — chỉ đánh giá + suggest theo đúng thị trường "
+                        "có install."
                     )
                 else:
                     st.caption(
                         f"ℹ️ Ghi nhận thêm: có doanh thu từ quốc gia không có install "
-                        f"nào ({_phantom_list}) — không ảnh hưởng nhiều tới chẩn đoán ở trên."
+                        f"nào ({_phantom_list}) — các quốc gia này KHÔNG được đưa vào "
+                        "bảng/chẩn đoán ở trên (không có install để tính CPI/LTV), không "
+                        "ảnh hưởng tới kết luận."
                     )
 
             if any_cpi_dat:
@@ -1365,7 +1371,7 @@ def page_campaign_doctor():
 
     st.divider()
     st.subheader("Cắt lát khoanh vùng")
-    slice_tab1, slice_tab2, slice_tab3 = st.tabs(["Theo quốc gia", "Theo creative", "Theo khung giờ"])
+    slice_tab1, slice_tab2 = st.tabs(["Theo quốc gia", "Theo creative"])
 
     with slice_tab1:
         # ĐÃ BỎ nút "Tải dữ liệu theo quốc gia" (24/09/2026) — Tầng 2 ở trên
@@ -1387,6 +1393,7 @@ def page_campaign_doctor():
                 st.dataframe(
                     country_df, width="stretch", hide_index=True,
                     column_config={
+                        "Chi tiêu": st.column_config.NumberColumn(format="$%.2f"),
                         "Doanh thu": st.column_config.NumberColumn(format="$%.2f"),
                         "CPI": st.column_config.NumberColumn(format="$%.4f"),
                         "LTV (ARPU D0)": st.column_config.NumberColumn(format="$%.4f"),
@@ -1437,79 +1444,98 @@ def page_campaign_doctor():
                 )
                 st.caption("ROAS D0 thấp nhất lên đầu — nghi phạm chính.")
 
-    with slice_tab3:
-        st.caption("🔒 Cần token Adjust cá nhân — nhập ở sidebar bên trái.")
-        st.caption(
-            "Tìm QUY LUẬT LTV theo GIỜ TRONG NGÀY cho từng thị trường, gộp qua "
-            "NHIỀU NGÀY đã chốt — để biết khung giờ nào nên tăng/giảm ngân sách "
-            "cho từng thị trường (không phải nhiễu ngẫu nhiên của 1 ngày). Dữ "
-            "liệu này TỔNG HỢP CẢ APP (không riêng campaign đang xét nghiệm) — "
-            "quy luật giờ theo thị trường là hành vi người dùng theo múi giờ, "
-            "áp dụng chung cho mọi campaign chạy market đó. **CHỈ dùng LTV** — "
-            "không có CPI/ROAS theo giờ (chi phí không có grain thật theo giờ, "
-            "xem GHI_CHU_TIEN_DO.md)."
-        )
-        hmp_days_back = st.number_input(
-            "Số ngày gộp lại để tìm quy luật", min_value=7, max_value=30, value=14, step=7,
-            key="hmp_days_back",
-            help="Nhiều ngày hơn → quy luật đáng tin hơn nhưng tải lâu hơn (đã "
-            "đo thật: 14 ngày mất ~14 giây).",
-        )
-        hmp_fetch_clicked = st.button("Tải dữ liệu theo giờ × quốc gia", key="hmp_fetch")
 
-        if hmp_fetch_clicked:
-            hmp_raw, hmp_err = load_hourly_market_data(
-                int(hmp_days_back),
-                st.session_state.get("adjust_app_tokens", ""),
-                st.session_state.get("adjust_api_token", ""),
+# ══════════════════════════════════════════════════════════════════════
+# TRANG — Xét nghiệm › Tổng quan thị trường (TÁCH RIÊNG 24/09/2026 — trước đó
+# là tab "Theo khung giờ" nằm trong "Cắt lát khoanh vùng" của trang Xét
+# nghiệm/Theo campaign, user yêu cầu tách hẳn thành 1 tính năng con riêng vì
+# đây là phân tích TỔNG QUAN nhiều ngày/nhiều thị trường, không gắn với 1
+# campaign cụ thể đang xét nghiệm nào — không cần vào Cảnh báo trước như
+# "Theo campaign", tự chọn App trực tiếp (giống trang Benchmark)).
+# ══════════════════════════════════════════════════════════════════════
+def page_market_overview():
+    st.title("Tổng quan thị trường")
+    st.caption(
+        "Tìm QUY LUẬT LTV theo GIỜ TRONG NGÀY cho từng thị trường, gộp qua "
+        "NHIỀU NGÀY đã chốt — để biết khung giờ nào nên tăng/giảm ngân sách "
+        "cho từng thị trường (không phải nhiễu ngẫu nhiên của 1 ngày). Dữ liệu "
+        "TỔNG HỢP CẢ APP (mọi campaign chạy market đó) — quy luật giờ theo thị "
+        "trường là hành vi người dùng theo múi giờ, áp dụng chung cho mọi "
+        "campaign, không riêng 1 campaign cụ thể. **CHỈ dùng LTV** — không có "
+        "CPI/ROAS theo giờ (chi phí không có grain thật theo giờ, xem "
+        "GHI_CHU_TIEN_DO.md)."
+    )
+    api_token = st.session_state.get("adjust_api_token", "")
+    app_tokens_raw = st.session_state.get("adjust_app_tokens", "")
+    st.caption("🔒 Cần token Adjust cá nhân — nhập ở sidebar bên trái.")
+
+    product_ids, ids_err = get_known_product_ids(app_tokens_raw, api_token)
+    if ids_err:
+        st.info(f"👆 {ids_err}")
+        return
+    if not product_ids:
+        st.warning("Không tìm thấy app nào cho token này trong 7 ngày qua — kiểm tra lại App Token ở sidebar.")
+        return
+
+    product_id = st.selectbox("App", product_ids, key="hmp_page_app")
+
+    hmp_days_back = st.number_input(
+        "Số ngày gộp lại để tìm quy luật", min_value=7, max_value=30, value=14, step=7,
+        key="hmp_days_back",
+        help="Nhiều ngày hơn → quy luật đáng tin hơn nhưng tải lâu hơn (đã "
+        "đo thật: 14 ngày mất ~14 giây).",
+    )
+    hmp_fetch_clicked = st.button("Tải dữ liệu theo giờ × quốc gia", key="hmp_fetch")
+
+    if hmp_fetch_clicked:
+        hmp_raw, hmp_err = load_hourly_market_data(int(hmp_days_back), app_tokens_raw, api_token)
+        st.session_state.hmp_raw = hmp_raw
+        st.session_state.hmp_err = hmp_err
+        st.session_state.hmp_product_used = product_id
+
+    hmp_raw = st.session_state.get("hmp_raw")
+    hmp_stale = st.session_state.get("hmp_product_used") != product_id
+    if st.session_state.get("hmp_err"):
+        st.error(f"❌ {st.session_state.hmp_err}")
+    elif hmp_raw is None or hmp_stale:
+        st.info("👆 Bấm **Tải dữ liệu theo giờ × quốc gia** để xem quy luật.")
+    elif hmp_raw.empty:
+        st.warning("Không có dữ liệu cho app này trong khoảng ngày đã chọn.")
+    else:
+        hmp_scope = hmp_raw[hmp_raw["app"].str.startswith(product_id)]
+        patterns = hmp_module.build_hourly_market_patterns(hmp_scope)
+        if patterns.empty:
+            st.warning(
+                "Không đủ dữ liệu để tìm quy luật (quá ít install theo từng "
+                "giờ/quốc gia — thử tăng số ngày gộp lại)."
             )
-            st.session_state.hmp_raw = hmp_raw
-            st.session_state.hmp_err = hmp_err
-            st.session_state.hmp_product_used = product_id
-
-        hmp_raw = st.session_state.get("hmp_raw")
-        hmp_stale = st.session_state.get("hmp_product_used") != product_id
-        if st.session_state.get("hmp_err"):
-            st.error(f"❌ {st.session_state.hmp_err}")
-        elif hmp_raw is None or hmp_stale:
-            st.info("👆 Bấm **Tải dữ liệu theo giờ × quốc gia** để xem quy luật.")
-        elif hmp_raw.empty:
-            st.warning("Không có dữ liệu cho app này trong khoảng ngày đã chọn.")
         else:
-            hmp_scope = hmp_raw[hmp_raw["app"].str.startswith(product_id)]
-            patterns = hmp_module.build_hourly_market_patterns(hmp_scope)
-            if patterns.empty:
+            summary = hmp_module.summarize_peak_and_low_hours(patterns)
+            if summary.empty:
                 st.warning(
-                    "Không đủ dữ liệu để tìm quy luật (quá ít install theo từng "
-                    "giờ/quốc gia — thử tăng số ngày gộp lại)."
+                    "Chưa đủ giờ có dữ liệu ở các thị trường để so sánh giờ "
+                    "vàng/giờ đáy — thử tăng số ngày gộp lại."
                 )
             else:
-                summary = hmp_module.summarize_peak_and_low_hours(patterns)
-                if summary.empty:
-                    st.warning(
-                        "Chưa đủ giờ có dữ liệu ở các thị trường để so sánh giờ "
-                        "vàng/giờ đáy — thử tăng số ngày gộp lại."
-                    )
-                else:
+                st.dataframe(
+                    summary, width="stretch", hide_index=True,
+                    column_config={
+                        "LTV giờ vàng (TB)": st.column_config.NumberColumn(format="$%.4f"),
+                        "LTV giờ đáy (TB)": st.column_config.NumberColumn(format="$%.4f"),
+                        "Chênh lệch (%)": st.column_config.NumberColumn(format="%.0f%%"),
+                    },
+                )
+                st.caption(
+                    "Chênh lệch cao nhất lên đầu — thị trường có khác biệt rõ "
+                    "rệt giữa giờ tốt/xấu nhất, đáng cân nhắc điều chỉnh ngân "
+                    "sách theo khung giờ. Gợi ý: **tăng** ngân sách/bid vào "
+                    "\"Giờ vàng\", **giảm**/dồn budget sang giờ khác vào \"Giờ đáy\"."
+                )
+                with st.expander("Xem chi tiết LTV từng giờ của từng thị trường"):
                     st.dataframe(
-                        summary, width="stretch", hide_index=True,
-                        column_config={
-                            "LTV giờ vàng (TB)": st.column_config.NumberColumn(format="$%.4f"),
-                            "LTV giờ đáy (TB)": st.column_config.NumberColumn(format="$%.4f"),
-                            "Chênh lệch (%)": st.column_config.NumberColumn(format="%.0f%%"),
-                        },
+                        patterns, width="stretch", hide_index=True,
+                        column_config={"LTV": st.column_config.NumberColumn(format="$%.4f")},
                     )
-                    st.caption(
-                        "Chênh lệch cao nhất lên đầu — thị trường có khác biệt rõ "
-                        "rệt giữa giờ tốt/xấu nhất, đáng cân nhắc điều chỉnh ngân "
-                        "sách theo khung giờ. Gợi ý: **tăng** ngân sách/bid vào "
-                        "\"Giờ vàng\", **giảm**/dồn budget sang giờ khác vào \"Giờ đáy\"."
-                    )
-                    with st.expander("Xem chi tiết LTV từng giờ của từng thị trường"):
-                        st.dataframe(
-                            patterns, width="stretch", hide_index=True,
-                            column_config={"LTV": st.column_config.NumberColumn(format="$%.4f")},
-                        )
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1521,13 +1547,25 @@ def page_campaign_doctor():
 # THÊM trang "Benchmark" (23/09/2026) — tách riêng khỏi trang Xét nghiệm (và
 # trước đó thử để ở sidebar, user phản hồi bất tiện) để có đủ chỗ nhập +
 # nhìn benchmark, dùng chung cho Tầng 1 lẫn tab "Theo quốc gia" ở Xét nghiệm.
+# TÁCH "Xét nghiệm" thành NHÓM có 2 tính năng con (24/09/2026, theo yêu cầu
+# user): "Theo campaign" (bản cũ — Tầng 1/Tầng 2/cắt lát cho 1 campaign cụ
+# thể đang bị cảnh báo) và "Tổng quan thị trường" (tách từ tab "Theo khung
+# giờ" cũ — phân tích TỔNG QUAN nhiều ngày để tìm quy luật giờ vàng/giờ đáy
+# LTV theo thị trường, không gắn với 1 campaign cụ thể). Dùng dict thay vì
+# list để `st.navigation()` tự vẽ dropdown/nhóm trong sidebar — các trang còn
+# lại giữ nguyên KHÔNG nhóm (key rỗng "" không hiện tiêu đề nhóm).
 pg = st.navigation(
-    [
-        st.Page(page_adjust, title="Adjust", icon=":material/monitoring:", default=True),
-        st.Page(page_alerts, title="Cảnh báo", icon=":material/warning:"),
-        st.Page(page_campaign_doctor, title="Xét nghiệm", icon=":material/stethoscope:"),
-        st.Page(page_benchmark, title="Benchmark", icon=":material/rule:"),
-    ],
+    {
+        "": [
+            st.Page(page_adjust, title="Adjust", icon=":material/monitoring:", default=True),
+            st.Page(page_alerts, title="Cảnh báo", icon=":material/warning:"),
+            st.Page(page_benchmark, title="Benchmark", icon=":material/rule:"),
+        ],
+        "Xét nghiệm": [
+            st.Page(page_campaign_doctor, title="Theo campaign", icon=":material/stethoscope:"),
+            st.Page(page_market_overview, title="Tổng quan thị trường", icon=":material/public:"),
+        ],
+    },
     expanded=True,
 )
 pg.run()

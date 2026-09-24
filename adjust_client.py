@@ -214,6 +214,21 @@ def fetch_hourly_today(api_token: str, app_tokens: list, ad_spend_mode: str | No
     )
 
 
+def fetch_hourly_by_country(api_token: str, app_tokens: list, days_back: int = 14, **kw) -> dict:
+    """THÊM 24/09/2026 — kéo dữ liệu theo GIỜ + QUỐC GIA cho NHIỀU NGÀY ĐÃ
+    CHỐT (mặc định 14 ngày, kết thúc HÔM QUA — KHÔNG lấy hôm nay, vì mục đích
+    là tìm QUY LUẬT LTV theo giờ ổn định của từng thị trường, cần dữ liệu đã
+    hoàn chỉnh qua nhiều ngày, không phải số "đang chạy" của 1 ngày). Dùng
+    cho tính năng "Quy luật theo giờ × thị trường" ở Xét nghiệm.
+
+    Đã kiểm chứng bằng số thật: dimension "app,hour,country" cho 14 ngày ra
+    11.704 dòng, mất 13.9s, tổng ad_revenue khớp gần như tuyệt đối (976.24 vs
+    976.23, chênh do làm tròn) với cách tính theo "app,day" — đáng tin cho
+    LTV. KHÔNG dùng để tính CPI/ROAS theo giờ (chi phí không có grain thật
+    theo giờ, xem intraday_alerts.py)."""
+    return call_adjust(api_token, app_tokens, "app,hour,country", days_back=days_back, include_today=False, **kw)
+
+
 def fetch_hourly_for_date(api_token: str, app_tokens: list, date_str: str, ad_spend_mode: str | None = None, **kw) -> dict:
     """THÊM 23/09/2026 (theo yêu cầu user — tạm dùng số ngày hôm trước trong
     lúc chờ Meta API): kéo dữ liệu THEO GIỜ cho 1 NGÀY CỤ THỂ trong quá khứ

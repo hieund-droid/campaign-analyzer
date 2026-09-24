@@ -58,6 +58,7 @@ from dotenv import load_dotenv
 import adjust_client as ac
 import benchmarks as bm
 import campaign_doctor as cdoc
+import hourly_market_patterns as hmp_module
 import intraday_alerts as ia
 from streamlit_local_storage import LocalStorage
 
@@ -270,6 +271,29 @@ def load_creative_data(days_back: int, app_tokens_raw: str, api_token: str):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
     return df, None, warning_msg
+
+
+@st.cache_data(ttl=15 * 60, show_spinner="Đang lấy dữ liệu theo giờ × quốc gia (nhiều ngày)...")
+def load_hourly_market_data(days_back: int, app_tokens_raw: str, api_token: str):
+    """Dùng cho tab "Theo khung giờ" ở Xét nghiệm — kéo dimension
+    "app,hour,country" cho NHIỀU NGÀY đã chốt (xem
+    adjust_client.fetch_hourly_by_country()). KHÔNG lọc theo 1 campaign cụ
+    thể — dữ liệu này TỔNG HỢP CẢ APP, vì quy luật "giờ nào tốt cho thị
+    trường nào" là đặc điểm HÀNH VI NGƯỜI DÙNG theo múi giờ, áp dụng chung
+    cho mọi campaign chạy market đó, không riêng 1 campaign — gộp cả app cho
+    nhiều dữ liệu hơn, quy luật đáng tin hơn."""
+    if not api_token or not app_tokens_raw:
+        return None, "Thiếu API Token / App Token."
+    app_tokens = ac.parse_app_tokens(app_tokens_raw)
+    try:
+        data = ac.fetch_hourly_by_country(api_token, app_tokens, days_back=days_back, exit_on_error=False)
+    except Exception as e:  # noqa: BLE001
+        return None, f"Lỗi gọi Adjust API: {e}"
+    warning_msg = ac.extract_warnings(data)
+    rows = data.get("rows") or []
+    if not rows:
+        return pd.DataFrame(), warning_msg
+    return pd.DataFrame(rows), warning_msg
 
 
 @st.cache_data(ttl=15 * 60, show_spinner="Đang lấy dữ liệu theo quốc gia...")
@@ -1089,37 +1113,78 @@ def page_campaign_doctor():
     # THÊM 24/09/2026 (theo yêu cầu user): gợi ý HÀNH ĐỘNG dựa trên CHIỀU của
     # tín hiệu realtime đưa campaign này vào đây — tách biệt với Tầng 1 (vốn
     # so benchmark theo NGÀY/QUỐC GIA, không liên quan tín hiệu trong ngày).
+    #
+    # SỬA 24/09/2026 (user chỉ ra): trang Cảnh báo mặc định xem NGÀY ĐÃ QUA
+    # (không phải "hôm nay") — gợi ý kiểu "tăng ngân sách NGAY TRONG NGÀY" vô
+    # nghĩa với dữ liệu quá khứ (ngày đó đã qua rồi, không "hành động ngay"
+    # được nữa). Phân biệt rõ 2 trường hợp: đang xem "hôm nay" (số vẫn đang
+    # chạy, HÀNH ĐỘNG NGAY được) vs xem NGÀY QUÁ KHỨ (chỉ là 1 QUAN SÁT, cần
+    # coi đây là gợi ý về QUY LUẬT khung giờ để áp dụng cho NGÀY SAU, không
+    # phải hành động tức thời — và chỉ dựa trên 1 ngày nên CHƯA CHẮC là quy
+    # luật thật, cần xem nhiều ngày mới kết luận chắc).
     _flag = flag_by_campaign[selected_campaign]
     _pct = _flag.get("arpu_pct_change") or 0
     _gap = _flag.get("actual_hours_gap")
+    _view_date_iso2 = st.session_state.get("al_view_date_used")
+    _is_today_view2 = _view_date_iso2 == date.today().isoformat()
+    _baseline_hhmm = _flag["baseline_ts"][11:16]
+    _latest_hhmm = _flag["latest_ts"][11:16]
+
     if _flag.get("direction") == "tang":
         st.success(
             f"📈 **LTV đang TĂNG {_pct:.1f}%** trong khoảng ~{_gap:.1f} tiếng qua "
-            f"({_flag['baseline_ts'][11:16]} → {_flag['latest_ts'][11:16]}) — tín hiệu TỐT."
+            f"({_baseline_hhmm} → {_latest_hhmm}) — tín hiệu TỐT."
         )
-        st.markdown(
-            "**Gợi ý hành động:**\n"
-            "- Cân nhắc **tăng ngân sách ngay trong ngày** để tận dụng thời điểm "
-            "LTV cao — chờ đến hôm sau có thể lỡ mất giai đoạn tốt.\n"
-            "- Xem **cắt lát quốc gia/creative** bên dưới để biết ĐÚNG nước/creative "
-            "nào đang kéo LTV lên — ưu tiên nhân rộng đúng chỗ đó thay vì tăng "
-            "ngân sách dàn trải cho cả campaign."
-        )
+        if _is_today_view2:
+            st.markdown(
+                "**Gợi ý hành động (đang xem HÔM NAY — hành động NGAY được):**\n"
+                "- Cân nhắc **tăng ngân sách ngay bây giờ** để tận dụng thời điểm "
+                "LTV cao — chờ đến hôm sau có thể lỡ mất giai đoạn tốt.\n"
+                "- Xem **cắt lát quốc gia/creative** bên dưới để biết ĐÚNG nước/"
+                "creative nào đang kéo LTV lên — ưu tiên nhân rộng đúng chỗ đó "
+                "thay vì tăng ngân sách dàn trải cho cả campaign."
+            )
+        else:
+            st.markdown(
+                f"**Gợi ý (đang xem NGÀY ĐÃ QUA, {_baseline_hhmm}-{_latest_hhmm} "
+                f"của ngày đó — không còn \"hành động ngay\" được nữa, đây là 1 "
+                "QUAN SÁT để tham khảo):**\n"
+                f"- Khung giờ **{_baseline_hhmm}-{_latest_hhmm}** có vẻ là lúc LTV "
+                "tốt cho campaign này — nếu khung giờ này LẶP LẠI ở nhiều ngày "
+                "khác (chưa chắc chắn chỉ với 1 ngày), có thể cân nhắc tăng ngân "
+                "sách vào ĐÚNG khung giờ này ở các ngày TỚI.\n"
+                "- Xem **cắt lát quốc gia/creative** bên dưới để biết nước/creative "
+                "nào đang kéo LTV lên trong khung giờ đó."
+            )
     else:
         st.warning(
             f"📉 **LTV đang GIẢM {_pct:.1f}%** trong khoảng ~{_gap:.1f} tiếng qua "
-            f"({_flag['baseline_ts'][11:16]} → {_flag['latest_ts'][11:16]}) — cần theo dõi sát."
+            f"({_baseline_hhmm} → {_latest_hhmm}) — cần theo dõi sát."
         )
-        st.markdown(
-            "**Gợi ý hành động:**\n"
-            "- Cân nhắc **tạm giảm ngân sách** hoặc theo dõi thêm 1-2 mốc giờ "
-            "nữa trước khi cắt hẳn — nếu đang xem \"hôm nay\", LTV cuối ngày có "
-            "thể tạm thấp chỉ vì installs mới chưa kịp sinh doanh thu (không "
-            "phải chất lượng user tệ thật), xem lại với ngày đã qua lâu hơn để "
-            "chắc chắn.\n"
-            "- Xem **cắt lát quốc gia/creative** bên dưới để biết ĐÚNG nước/"
-            "creative nào đang kéo xuống trước khi quyết định cắt cả campaign."
-        )
+        if _is_today_view2:
+            st.markdown(
+                "**Gợi ý hành động (đang xem HÔM NAY — hành động NGAY được):**\n"
+                "- Cân nhắc **tạm giảm ngân sách** hoặc theo dõi thêm 1-2 mốc giờ "
+                "nữa trước khi cắt hẳn — LTV cuối ngày có thể tạm thấp chỉ vì "
+                "installs mới chưa kịp sinh doanh thu (không phải chất lượng "
+                "user tệ thật), xem lại với ngày đã qua lâu hơn để chắc chắn "
+                "trước khi quyết định.\n"
+                "- Xem **cắt lát quốc gia/creative** bên dưới để biết ĐÚNG nước/"
+                "creative nào đang kéo xuống trước khi quyết định cắt cả campaign."
+            )
+        else:
+            st.markdown(
+                f"**Gợi ý (đang xem NGÀY ĐÃ QUA, {_baseline_hhmm}-{_latest_hhmm} "
+                f"của ngày đó — không còn \"hành động ngay\" được nữa, đây là 1 "
+                "QUAN SÁT để tham khảo):**\n"
+                f"- Khung giờ **{_baseline_hhmm}-{_latest_hhmm}** có vẻ là lúc LTV "
+                "kém cho campaign này — nếu khung giờ này LẶP LẠI ở nhiều ngày "
+                "khác (chưa chắc chắn chỉ với 1 ngày), có thể cân nhắc giảm ngân "
+                "sách/dời budget sang khung giờ khác vào các ngày TỚI, thay vì "
+                "cắt cả campaign.\n"
+                "- Xem **cắt lát quốc gia/creative** bên dưới để biết nước/creative "
+                "nào đang kéo xuống trong khung giờ đó."
+            )
 
     # Benchmark ĐỔI sang nhập THEO QUỐC GIA (23/09/2026, trang "Benchmark") —
     # Tầng 1 (đánh giá CẢ campaign, gộp mọi quốc gia) KHÔNG còn 1 benchmark
@@ -1240,7 +1305,7 @@ def page_campaign_doctor():
 
     st.divider()
     st.subheader("Cắt lát khoanh vùng")
-    slice_tab1, slice_tab2 = st.tabs(["Theo quốc gia", "Theo creative"])
+    slice_tab1, slice_tab2, slice_tab3 = st.tabs(["Theo quốc gia", "Theo creative", "Theo khung giờ"])
 
     with slice_tab1:
         st.caption("🔒 Cần token Adjust cá nhân — nhập ở sidebar bên trái.")
@@ -1328,6 +1393,80 @@ def page_campaign_doctor():
                     },
                 )
                 st.caption("ROAS D0 thấp nhất lên đầu — nghi phạm chính.")
+
+    with slice_tab3:
+        st.caption("🔒 Cần token Adjust cá nhân — nhập ở sidebar bên trái.")
+        st.caption(
+            "Tìm QUY LUẬT LTV theo GIỜ TRONG NGÀY cho từng thị trường, gộp qua "
+            "NHIỀU NGÀY đã chốt — để biết khung giờ nào nên tăng/giảm ngân sách "
+            "cho từng thị trường (không phải nhiễu ngẫu nhiên của 1 ngày). Dữ "
+            "liệu này TỔNG HỢP CẢ APP (không riêng campaign đang xét nghiệm) — "
+            "quy luật giờ theo thị trường là hành vi người dùng theo múi giờ, "
+            "áp dụng chung cho mọi campaign chạy market đó. **CHỈ dùng LTV** — "
+            "không có CPI/ROAS theo giờ (chi phí không có grain thật theo giờ, "
+            "xem GHI_CHU_TIEN_DO.md)."
+        )
+        hmp_days_back = st.number_input(
+            "Số ngày gộp lại để tìm quy luật", min_value=7, max_value=30, value=14, step=7,
+            key="hmp_days_back",
+            help="Nhiều ngày hơn → quy luật đáng tin hơn nhưng tải lâu hơn (đã "
+            "đo thật: 14 ngày mất ~14 giây).",
+        )
+        hmp_fetch_clicked = st.button("Tải dữ liệu theo giờ × quốc gia", key="hmp_fetch")
+
+        if hmp_fetch_clicked:
+            hmp_raw, hmp_err = load_hourly_market_data(
+                int(hmp_days_back),
+                st.session_state.get("adjust_app_tokens", ""),
+                st.session_state.get("adjust_api_token", ""),
+            )
+            st.session_state.hmp_raw = hmp_raw
+            st.session_state.hmp_err = hmp_err
+            st.session_state.hmp_product_used = product_id
+
+        hmp_raw = st.session_state.get("hmp_raw")
+        hmp_stale = st.session_state.get("hmp_product_used") != product_id
+        if st.session_state.get("hmp_err"):
+            st.error(f"❌ {st.session_state.hmp_err}")
+        elif hmp_raw is None or hmp_stale:
+            st.info("👆 Bấm **Tải dữ liệu theo giờ × quốc gia** để xem quy luật.")
+        elif hmp_raw.empty:
+            st.warning("Không có dữ liệu cho app này trong khoảng ngày đã chọn.")
+        else:
+            hmp_scope = hmp_raw[hmp_raw["app"].str.startswith(product_id)]
+            patterns = hmp_module.build_hourly_market_patterns(hmp_scope)
+            if patterns.empty:
+                st.warning(
+                    "Không đủ dữ liệu để tìm quy luật (quá ít install theo từng "
+                    "giờ/quốc gia — thử tăng số ngày gộp lại)."
+                )
+            else:
+                summary = hmp_module.summarize_peak_and_low_hours(patterns)
+                if summary.empty:
+                    st.warning(
+                        "Chưa đủ giờ có dữ liệu ở các thị trường để so sánh giờ "
+                        "vàng/giờ đáy — thử tăng số ngày gộp lại."
+                    )
+                else:
+                    st.dataframe(
+                        summary, width="stretch", hide_index=True,
+                        column_config={
+                            "LTV giờ vàng (TB)": st.column_config.NumberColumn(format="$%.4f"),
+                            "LTV giờ đáy (TB)": st.column_config.NumberColumn(format="$%.4f"),
+                            "Chênh lệch (%)": st.column_config.NumberColumn(format="%.0f%%"),
+                        },
+                    )
+                    st.caption(
+                        "Chênh lệch cao nhất lên đầu — thị trường có khác biệt rõ "
+                        "rệt giữa giờ tốt/xấu nhất, đáng cân nhắc điều chỉnh ngân "
+                        "sách theo khung giờ. Gợi ý: **tăng** ngân sách/bid vào "
+                        "\"Giờ vàng\", **giảm**/dồn budget sang giờ khác vào \"Giờ đáy\"."
+                    )
+                    with st.expander("Xem chi tiết LTV từng giờ của từng thị trường"):
+                        st.dataframe(
+                            patterns, width="stretch", hide_index=True,
+                            column_config={"LTV": st.column_config.NumberColumn(format="$%.4f")},
+                        )
 
 
 # ══════════════════════════════════════════════════════════════════════

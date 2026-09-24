@@ -15,9 +15,14 @@ CHỈ PHÂN TÍCH LTV (= ad_revenue ÷ installs) — KHÔNG CPI/ROAS: chi phí
 duy nhất, xem GHI_CHU_TIEN_DO.md mục "PHÁT HIỆN LỚN..." 23/09/2026) — dù gộp
 bao nhiêu ngày cũng không sửa được giới hạn này.
 
-CHỈ XÉT TOP THỊ TRƯỜNG theo volume + CHỈ giữ ô (quốc gia, giờ) có đủ install
-tối thiểu (gộp qua N ngày) — quốc gia/giờ có quá ít dữ liệu (1-2 install rải
-rác) không đủ để kết luận là "quy luật", chỉ là nhiễu ngẫu nhiên.
+CHỈ XÉT TOP THỊ TRƯỜNG theo DOANH THU (ad_revenue, KHÔNG phải theo installs —
+đổi 24/09/2026 theo yêu cầu user: "việc chọn thị trường phải dựa vào rev
+thôi, vì install ở các thị trường tier 2 3 lúc nào cũng nhiều hơn tier 1" —
+xếp theo installs sẽ ưu tiên nhầm các thị trường tier 2/3 nhiều install
+nhưng LTV thấp, bỏ sót tier 1 ít install hơn nhưng mới là nơi kiếm tiền
+thật) + CHỈ giữ ô (quốc gia, giờ) có đủ install tối thiểu (gộp qua N ngày) —
+quốc gia/giờ có quá ít dữ liệu (1-2 install rải rác) không đủ để kết luận là
+"quy luật", chỉ là nhiễu ngẫu nhiên.
 """
 
 import pandas as pd
@@ -39,8 +44,9 @@ def build_hourly_market_patterns(
     (sum-then-divide đúng cách, không lấy trung bình cộng qua các ngày).
 
     Output: DataFrame cột "Quốc gia", "Giờ" (0-23), "Installs" (tổng qua mọi
-    ngày), "LTV" — CHỈ giữ Top `top_n_markets` quốc gia theo tổng installs,
-    và CHỈ giữ ô (quốc gia, giờ) có đủ `min_installs_per_hour` install."""
+    ngày), "LTV" — CHỈ giữ Top `top_n_markets` quốc gia theo TỔNG DOANH THU
+    (ad_revenue, KHÔNG phải installs — xem docstring đầu file), và CHỈ giữ ô
+    (quốc gia, giờ) có đủ `min_installs_per_hour` install."""
     if hourly_country_df is None or hourly_country_df.empty:
         return pd.DataFrame()
 
@@ -50,7 +56,7 @@ def build_hourly_market_patterns(
     df["hour_of_day"] = df["hour"].str.slice(11, 13).astype(int)
 
     top_markets = (
-        df.groupby("country")["installs"].sum().sort_values(ascending=False).head(top_n_markets).index.tolist()
+        df.groupby("country")["ad_revenue"].sum().sort_values(ascending=False).head(top_n_markets).index.tolist()
     )
     df = df[df["country"].isin(top_markets)]
     if df.empty:
@@ -118,13 +124,18 @@ def build_market_suggestions(summary_df: pd.DataFrame) -> list:
     đầu — đáng làm nhất trước)."""
     if summary_df is None or summary_df.empty:
         return []
+    # LƯU Ý escape "\$" (KHÔNG để "$" trần) — Streamlit render markdown coi 2
+    # dấu "$" trở lên trong CÙNG 1 lần gọi st.markdown() là ranh giới công
+    # thức LaTeX, nuốt mất chữ ở giữa (kể cả **bold**) — đã gặp lỗi thật
+    # (24/09/2026, user chụp ảnh chỉ ra "**giảm**" hiện nguyên văn không in
+    # đậm, dấu "$" biến mất) do câu gợi ý có 2 số tiền "$X" trong 1 câu.
     return [
         {
             "Quốc gia": r["Quốc gia"],
             "Gợi ý": (
                 f"**Tăng** ngân sách/bid vào khung **{r['Giờ vàng']}** (LTV TB "
-                f"${r['LTV giờ vàng (TB)']:.4f}) — **giảm**/dồn ngân sách khỏi "
-                f"khung **{r['Giờ đáy']}** (LTV TB ${r['LTV giờ đáy (TB)']:.4f}) "
+                f"\\${r['LTV giờ vàng (TB)']:.4f}) — **giảm**/dồn ngân sách khỏi "
+                f"khung **{r['Giờ đáy']}** (LTV TB \\${r['LTV giờ đáy (TB)']:.4f}) "
                 f"— chênh lệch {r['Chênh lệch (%)'] * 100:.0f}%."
             ),
         }

@@ -1295,8 +1295,12 @@ def page_campaign_doctor():
             # ROAS D0 gộp cả campaign vẫn ổn dù thị trường chính ở trên tệ.
             phantom_df = cdoc.detect_phantom_revenue(country_raw)
             if not phantom_df.empty:
+                # Escape "\$" — 2+ dấu "$" trong CÙNG 1 lần gọi st.warning()/
+                # st.caption() (khi có ≥2 quốc gia phantom) bị Streamlit hiểu
+                # nhầm thành ranh giới công thức LaTeX, nuốt mất chữ ở giữa
+                # (xem lỗi tương tự đã sửa ở hourly_market_patterns.py).
                 _phantom_list = ", ".join(
-                    f"{r['Quốc gia']} (${r['Doanh thu (không có install)']:.2f})"
+                    f"{r['Quốc gia']} (\\${r['Doanh thu (không có install)']:.2f})"
                     for _, r in phantom_df.iterrows()
                 )
                 if any_cpi_dat or any_ltv_kem:

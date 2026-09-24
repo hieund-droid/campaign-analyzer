@@ -939,6 +939,12 @@ def page_alerts():
                         )
             st.info(" ".join(_diag_parts))
     else:
+        # ĐỔI 24/09/2026 (user chỉ ra): mọi dữ liệu ở đây đều là LỊCH SỬ (kể cả
+        # khi "Bây giờ" = đang xem hôm nay) — cột "Installs bây giờ"/"LTV bây
+        # giờ" từng bị HARDCODE cứng chữ "bây giờ" dù đang xem ngày quá khứ rất
+        # xa (lẽ ra phải là "Installs cuối ngày"/"LTV cuối ngày" như cột giờ đã
+        # tự đổi đúng) — sửa dùng chung 1 biến để nhất quán.
+        _end_word = _now_or_end_label.lower()
         realtime_rows = [
             {
                 "Campaign": f["campaign"],
@@ -947,9 +953,9 @@ def page_alerts():
                 "Lúc đó": f["baseline_ts"][11:16],
                 _now_or_end_label: f["latest_ts"][11:16],
                 "Installs lúc đó": f["baseline"].get("installs_cum"),
-                "Installs bây giờ": f["latest"].get("installs_cum"),
+                f"Installs {_end_word}": f["latest"].get("installs_cum"),
                 "LTV lúc đó": f["baseline"].get("arpu"),
-                "LTV bây giờ": f["latest"].get("arpu"),
+                f"LTV {_end_word}": f["latest"].get("arpu"),
                 "LTV % đổi": f["arpu_pct_change"],
             }
             for f in all_flagged_today
@@ -958,13 +964,15 @@ def page_alerts():
             pd.DataFrame(realtime_rows), width="stretch", hide_index=True,
             column_config={
                 "LTV lúc đó": st.column_config.NumberColumn(format="$%.4f"),
-                "LTV bây giờ": st.column_config.NumberColumn(format="$%.4f"),
+                f"LTV {_end_word}": st.column_config.NumberColumn(format="$%.4f"),
                 "LTV % đổi": st.column_config.NumberColumn(format="%.1f%%"),
             },
         )
         st.caption(
             "Mỗi campaign hiện mốc so sánh cho thấy LTV giảm NHIỀU NHẤT (trong "
-            "số 1/2/3/6 tiếng trước, tự động chọn giờ gần mốc đó nhất)."
+            "số 1/2/3/6 tiếng trước, tự động chọn giờ gần mốc đó nhất). Bảng "
+            "này CHỈ liệt kê campaign LTV GIẢM vượt ngưỡng (đây là bảng cảnh "
+            "báo vấn đề) — campaign LTV tăng không hiện ở đây, không phải bị bỏ sót."
         )
 
     st.divider()
@@ -987,6 +995,7 @@ def page_alerts():
     if not all_flagged_since_hour:
         st.caption(f"Chưa có gì vượt ngưỡng so với ~{int(al_since_hour):02d}h00 của {_date_label}.")
     else:
+        _end_word = _now_or_end_label.lower()
         since_hour_rows = [
             {
                 "Campaign": f["campaign"],
@@ -994,9 +1003,9 @@ def page_alerts():
                 f"Lúc ~{int(al_since_hour):02d}h": f["baseline_ts"][11:16],
                 _now_or_end_label: f["latest_ts"][11:16],
                 "Installs lúc đó": f["baseline"].get("installs_cum"),
-                "Installs bây giờ": f["latest"].get("installs_cum"),
+                f"Installs {_end_word}": f["latest"].get("installs_cum"),
                 "LTV lúc đó": f["baseline"].get("arpu"),
-                "LTV bây giờ": f["latest"].get("arpu"),
+                f"LTV {_end_word}": f["latest"].get("arpu"),
                 "LTV % đổi": f["arpu_pct_change"],
             }
             for f in all_flagged_since_hour
@@ -1005,7 +1014,7 @@ def page_alerts():
             pd.DataFrame(since_hour_rows), width="stretch", hide_index=True,
             column_config={
                 "LTV lúc đó": st.column_config.NumberColumn(format="$%.4f"),
-                "LTV bây giờ": st.column_config.NumberColumn(format="$%.4f"),
+                f"LTV {_end_word}": st.column_config.NumberColumn(format="$%.4f"),
                 "LTV % đổi": st.column_config.NumberColumn(format="%.1f%%"),
             },
         )

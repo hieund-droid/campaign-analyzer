@@ -1190,114 +1190,171 @@ def page_campaign_doctor():
 
     # Benchmark ĐỔI sang nhập THEO QUỐC GIA (23/09/2026, trang "Benchmark") —
     # Tầng 1 (đánh giá CẢ campaign, gộp mọi quốc gia) KHÔNG còn 1 benchmark
-    # app-level để so nữa (giữ nguyên PHẦN LOGIC/HIỂN THỊ campaign như cũ,
-    # theo đúng yêu cầu user — chỉ là giờ không có benchmark app-level để đọc
-    # nữa). Việc so benchmark có ý nghĩa giờ nằm ở bảng "Theo quốc gia" bên
-    # dưới (mỗi dòng dùng benchmark của ĐÚNG quốc gia đó).
+    # app-level để so nữa. Việc so benchmark có ý nghĩa giờ nằm ở TỪNG QUỐC
+    # GIA (mỗi dòng dùng benchmark của ĐÚNG quốc gia đó) — xem Tầng 2 bên dưới.
     doc_threshold = 20.0
-    benchmark = {"cpi": None, "arpu_d0": None, "roas_d0": None, "retention_d1": None}
-    st.info(
-        "ℹ️ Benchmark giờ nhập theo TỪNG QUỐC GIA (trang **Benchmark**) — Tầng 1 "
-        "bên dưới chỉ hiện số THỰC TẾ của cả campaign (không so benchmark nữa). "
-        "So sánh với benchmark, xem bảng **\"Theo quốc gia\"** ở cuối trang này."
-    )
+
+    # SỬA 24/09/2026 (user chỉ ra 2 vấn đề): (1) thông báo cũ "nhập benchmark ở
+    # trên" trỏ SAI CHỖ — trang này không còn ô nhập benchmark nào nữa (đã
+    # chuyển hẳn sang trang "Benchmark" từ 23/09/2026); (2) số CPI/LTV/ROAS D0/
+    # Retention D1 gộp CẢ CAMPAIGN chỉ có ý nghĩa nếu campaign chạy 1 THỊ
+    # TRƯỜNG RIÊNG (tên có tên nước, VD "Mexico"/"US") — nếu campaign chạy
+    # GLOBAL (tên có chữ "GLOBAL", gộp nhiều nước), số này bị PHA LOÃNG qua
+    # nhiều nước nên không phản ánh đúng nước nào cả, dễ hiểu lầm là "ổn". Phát
+    # hiện GLOBAL bằng cách tìm chữ "global" (không phân biệt hoa/thường) trong
+    # tên campaign — theo đúng quy ước đặt tên UA team đang dùng.
+    _is_global_campaign = "global" in selected_campaign.lower()
+    if _is_global_campaign:
+        st.warning(
+            "⚠️ Campaign này chạy **GLOBAL** (gộp nhiều quốc gia) — số CPI/LTV/"
+            "ROAS D0/Retention D1 ở Tầng 1 bên dưới là số TRUNG BÌNH của TẤT CẢ "
+            "thị trường cộng lại nên bị PHA LOÃNG, không phản ánh đúng thị "
+            "trường cụ thể nào (dễ trông \"ổn\" dù có 1 vài nước đang tệ). Xem "
+            "**Tầng 2** ngay bên dưới để đánh giá đúng theo từng thị trường."
+        )
+    else:
+        st.info(
+            "ℹ️ Campaign này chạy 1 thị trường riêng nên số Tầng 1 bên dưới khá "
+            "sát với thị trường đó. Xem **Tầng 2** ngay bên dưới để so trực tiếp "
+            "với benchmark của đúng thị trường này (benchmark nhập ở trang "
+            "**Benchmark**)."
+        )
 
     stats = cdoc.period_stats_for_campaign(raw_df, product_id, selected_campaign)
     if stats is None:
         st.warning("Không tìm thấy dữ liệu Adjust cho campaign này (có thể do đổi bộ lọc).")
         return
 
-    tier1 = cdoc.diagnose_tier1(stats, benchmark, threshold_pct=doc_threshold)
-
     st.divider()
     st.subheader("Tầng 1 — CPI đắt hay User kém?")
     tcol1, tcol2, tcol3, tcol4 = st.columns(4)
-    tcol1.metric(
-        "CPI thực tế", fmt_money(stats["cpi"]),
-        delta=f"{tier1['cpi_pct_vs_bench']:.1f}% vs benchmark" if tier1["cpi_pct_vs_bench"] is not None else None,
-        delta_color="inverse",
-    )
-    tcol2.metric(
-        "LTV (ARPU D0) thực tế", fmt_money(stats.get("arpu_d0")),
-        delta=f"{tier1['arpu_pct_vs_bench']:.1f}% vs benchmark" if tier1["arpu_pct_vs_bench"] is not None else None,
-    )
-    tcol3.metric(
-        "ROAS D0 thực tế", fmt_percent(stats["roas_d0"]),
-        delta=f"{tier1['roas_pct_vs_bench']:.1f}% vs benchmark" if tier1["roas_pct_vs_bench"] is not None else None,
-    )
-    tcol4.metric(
-        "Retention D1 thực tế", fmt_percent(stats["retention_d1"]),
-        delta=f"{tier1['retention_pct_vs_bench']:.1f}% vs benchmark" if tier1["retention_pct_vs_bench"] is not None else None,
-    )
-
-    verdicts = []
-    if tier1["cpi_dat"]:
-        verdicts.append("🔴 **CPI đắt** — cao hơn benchmark quá ngưỡng.")
-    if tier1["user_kem"]:
-        kem_parts = []
-        if tier1["arpu_kem"]:
-            kem_parts.append("LTV (ARPU D0)")
-        if tier1["retention_kem"]:
-            kem_parts.append("Retention D1")
-        if tier1["roas_kem"]:
-            kem_parts.append("ROAS D0")
-        verdicts.append(f"🔴 **User kém** — {', '.join(kem_parts)} thấp hơn benchmark quá ngưỡng.")
-    if not verdicts:
-        st.info(
-            "Chưa phát hiện vấn đề rõ rệt so với benchmark đã nhập (hoặc benchmark "
-            "đang để trống — nhập benchmark ở trên để chẩn đoán chính xác hơn)."
-        )
-    else:
-        for v in verdicts:
-            st.markdown(v)
+    tcol1.metric("CPI thực tế", fmt_money(stats["cpi"]))
+    tcol2.metric("LTV (ARPU D0) thực tế", fmt_money(stats.get("arpu_d0")))
+    tcol3.metric("ROAS D0 thực tế", fmt_percent(stats["roas_d0"]))
+    tcol4.metric("Retention D1 thực tế", fmt_percent(stats["retention_d1"]))
 
     suggestions = []
 
-    if tier1["cpi_dat"]:
-        st.divider()
-        st.subheader("Tầng 2 — Vì sao CPI đắt? (so với các campaign khác cùng app)")
-        st.caption(
-            "CPM/CTR/CVR tính từ network_impressions/network_clicks của Adjust "
-            "(network tự báo cáo, cùng nguồn với network_cost) — không cần BigQuery."
-        )
-        this_stats = cdoc.aggregate_adjust_funnel(raw_df, product_id, campaign=selected_campaign)
-        peer_stats = cdoc.aggregate_adjust_funnel(raw_df, product_id, exclude_campaign=selected_campaign)
-        if not this_stats["installs"]:
-            st.warning("Không có đủ dữ liệu impressions/clicks cho campaign này để mổ xẻ CPM/CTR/CVR.")
-        else:
-            pcol1, pcol2, pcol3 = st.columns(3)
-            pcol1.metric(
-                "CPM campaign này", f"${this_stats['cpm']:.2f}" if this_stats["cpm"] else "N/A",
-                delta=f"peer TB: ${peer_stats['cpm']:.2f}" if peer_stats["cpm"] else None,
-            )
-            pcol2.metric(
-                "CTR campaign này", f"{this_stats['ctr_pct']:.2f}%" if this_stats["ctr_pct"] else "N/A",
-                delta=f"peer TB: {peer_stats['ctr_pct']:.2f}%" if peer_stats["ctr_pct"] else None,
-            )
-            pcol3.metric(
-                "CVR campaign này", f"{this_stats['cvr_pct']:.2f}%" if this_stats["cvr_pct"] else "N/A",
-                delta=f"peer TB: {peer_stats['cvr_pct']:.2f}%" if peer_stats["cvr_pct"] else None,
-            )
-            tier2_cpi = cdoc.diagnose_tier2_cpi(this_stats, peer_stats, threshold_pct=doc_threshold)
-            if tier2_cpi["findings"]:
-                for label, pct in tier2_cpi["findings"]:
-                    st.markdown(f"- **{label}** ({pct:+.1f}%)")
-                    suggestions.append(cdoc.SUGGESTION_TEXT[label])
-            else:
-                st.caption("CPM/CTR/CVR không lệch rõ rệt so với các campaign khác — CPI đắt có thể do nguyên nhân khác (VD cạnh tranh chung toàn thị trường).")
+    # TẦNG 2 — HỒI SINH 24/09/2026 với thiết kế MỚI (xem docstring
+    # cdoc.top_markets_slice()/cdoc.detect_phantom_revenue() trong
+    # campaign_doctor.py). Bản CŨ dùng benchmark gộp cả campaign
+    # (`tier1["cpi_dat"]`/`tier1["user_kem"]`) — từ 23/09/2026 benchmark đó
+    # LUÔN rỗng nên 2 cờ LUÔN False, Tầng 2 ÂM THẦM không hiện ra nữa, user
+    # phát hiện lại. Bản mới TỰ ĐỘNG lấy dữ liệu quốc gia của CHÍNH campaign
+    # này (không cần bấm nút — cache 15 phút, không tốn thêm lệnh gọi API nếu
+    # đã tải trong 15 phút qua, dùng lại đúng loader đã có ở tab "Theo quốc
+    # gia"), xét CPI/LTV cho TOP 3 thị trường TIÊU NHIỀU NHẤT — chạy đúng cho
+    # CẢ GLOBAL (top 3 thị trường quan trọng) LẪN campaign lẻ 1 thị trường
+    # (top 3 tự nhiên co về đúng 1 dòng).
+    benchmark_by_country = bm.get_all_country_benchmarks(product_id)
+    country_raw, country_err, country_warning = load_campaign_country_data(
+        selected_campaign, days_back_used,
+        st.session_state.get("adjust_app_tokens", ""),
+        st.session_state.get("adjust_api_token", ""),
+    )
+    st.session_state.doc_country_raw = country_raw
+    st.session_state.doc_country_err = country_err
+    st.session_state.doc_country_campaign = selected_campaign
 
-    if tier1["user_kem"]:
-        st.divider()
-        st.subheader("Tầng 2 — Vì sao User kém? (giữ chân hay giá trị/LTV?)")
-        if tier1["retention_kem"]:
-            st.markdown("- 🔴 **Retention D1 thấp** — vấn đề GIỮ CHÂN (user cài xong rồi bỏ sớm).")
-            suggestions.append(cdoc.SUGGESTION_TEXT["retention_kem"])
-        if tier1["arpu_kem"]:
-            st.markdown("- 🔴 **LTV (ARPU D0) thấp** — vấn đề GIÁ TRỊ NGƯỜI DÙNG (ở lại nhưng không tạo đủ giá trị).")
-            suggestions.append(cdoc.SUGGESTION_TEXT["arpu_kem"])
-        if tier1["roas_kem"] and not tier1["retention_kem"] and not tier1["arpu_kem"]:
-            st.markdown("- 🔴 **ROAS D0 thấp** — nhưng LTV và Retention riêng lẻ đều chưa rõ nguyên nhân.")
-            suggestions.append(cdoc.SUGGESTION_TEXT["roas_kem"])
+    st.divider()
+    st.subheader("Tầng 2 — Thị trường nào đang quyết định kết quả campaign?")
+    if country_err:
+        st.error(f"❌ {country_err}")
+    elif country_raw is None or country_raw.empty:
+        st.caption("Chưa có dữ liệu theo quốc gia cho campaign này trong khoảng ngày đã kéo.")
+    else:
+        top_df = cdoc.top_markets_slice(country_raw, benchmark_by_country=benchmark_by_country, top_n=3)
+        if top_df.empty:
+            st.caption("Không có thị trường nào đủ install tối thiểu (≥5) để xét.")
+        else:
+            st.caption(
+                f"Top {len(top_df)} thị trường TIÊU NHIỀU NHẤT (network_cost) trong "
+                "campaign này — campaign chạy lẻ 1 thị trường sẽ tự nhiên chỉ còn 1 "
+                "dòng (các nước khác quá ít install bị lọc bớt)."
+            )
+            st.dataframe(
+                top_df, width="stretch", hide_index=True,
+                column_config={
+                    "CPI": st.column_config.NumberColumn(format="$%.4f"),
+                    "LTV (ARPU D0)": st.column_config.NumberColumn(format="$%.4f"),
+                    "ROAS D0": st.column_config.NumberColumn(format="percent"),
+                    "Retention D1": st.column_config.NumberColumn(format="percent"),
+                    "CPI so benchmark": st.column_config.NumberColumn(format="%.1f%%"),
+                    "LTV so benchmark": st.column_config.NumberColumn(format="%.1f%%"),
+                },
+            )
+
+            _canh_bao_col = top_df.get("Cảnh báo", pd.Series(dtype=str)).fillna("")
+            any_cpi_dat = _canh_bao_col.str.contains("CPI đắt").any()
+            any_ltv_kem = _canh_bao_col.str.contains("LTV thấp").any()
+
+            # THÊM 24/09/2026 (theo yêu cầu user): phát hiện doanh thu từ quốc
+            # gia KHÔNG có install nào trong campaign này — giải thích vì sao
+            # ROAS D0 gộp cả campaign vẫn ổn dù thị trường chính ở trên tệ.
+            phantom_df = cdoc.detect_phantom_revenue(country_raw)
+            if not phantom_df.empty:
+                _phantom_list = ", ".join(
+                    f"{r['Quốc gia']} (${r['Doanh thu (không có install)']:.2f})"
+                    for _, r in phantom_df.iterrows()
+                )
+                if any_cpi_dat or any_ltv_kem:
+                    st.warning(
+                        f"⚠️ Phát hiện doanh thu ads từ quốc gia KHÔNG có install nào "
+                        f"trong campaign này: {_phantom_list}. Đây có thể là lý do ROAS "
+                        f"D0 GỘP CẢ CAMPAIGN ({fmt_percent(stats['roas_d0'])}) vẫn trông "
+                        "ổn dù thị trường chính ở trên đang có vấn đề — doanh thu \"lạ\" "
+                        "ngoài thị trường mục tiêu (user đổi vị trí sau khi cài, hoặc "
+                        "Adjust gán quốc gia theo nơi PHÁT SINH sự kiện thay vì nơi cài) "
+                        "đang bù vào, KHÔNG PHẢI vì thị trường chính đang tốt thật."
+                    )
+                else:
+                    st.caption(
+                        f"ℹ️ Ghi nhận thêm: có doanh thu từ quốc gia không có install "
+                        f"nào ({_phantom_list}) — không ảnh hưởng nhiều tới chẩn đoán ở trên."
+                    )
+
+            if any_cpi_dat:
+                st.divider()
+                st.subheader("Vì sao CPI đắt? (so với các campaign khác cùng app)")
+                st.caption(
+                    "CPM/CTR/CVR tính từ network_impressions/network_clicks của Adjust "
+                    "(network tự báo cáo, cùng nguồn với network_cost) — không cần BigQuery."
+                )
+                this_stats = cdoc.aggregate_adjust_funnel(raw_df, product_id, campaign=selected_campaign)
+                peer_stats = cdoc.aggregate_adjust_funnel(raw_df, product_id, exclude_campaign=selected_campaign)
+                if not this_stats["installs"]:
+                    st.warning("Không có đủ dữ liệu impressions/clicks cho campaign này để mổ xẻ CPM/CTR/CVR.")
+                else:
+                    pcol1, pcol2, pcol3 = st.columns(3)
+                    pcol1.metric(
+                        "CPM campaign này", f"${this_stats['cpm']:.2f}" if this_stats["cpm"] else "N/A",
+                        delta=f"peer TB: ${peer_stats['cpm']:.2f}" if peer_stats["cpm"] else None,
+                    )
+                    pcol2.metric(
+                        "CTR campaign này", f"{this_stats['ctr_pct']:.2f}%" if this_stats["ctr_pct"] else "N/A",
+                        delta=f"peer TB: {peer_stats['ctr_pct']:.2f}%" if peer_stats["ctr_pct"] else None,
+                    )
+                    pcol3.metric(
+                        "CVR campaign này", f"{this_stats['cvr_pct']:.2f}%" if this_stats["cvr_pct"] else "N/A",
+                        delta=f"peer TB: {peer_stats['cvr_pct']:.2f}%" if peer_stats["cvr_pct"] else None,
+                    )
+                    tier2_cpi = cdoc.diagnose_tier2_cpi(this_stats, peer_stats, threshold_pct=doc_threshold)
+                    if tier2_cpi["findings"]:
+                        for label, pct in tier2_cpi["findings"]:
+                            st.markdown(f"- **{label}** ({pct:+.1f}%)")
+                            suggestions.append(cdoc.SUGGESTION_TEXT[label])
+                    else:
+                        st.caption("CPM/CTR/CVR không lệch rõ rệt so với các campaign khác — CPI đắt có thể do nguyên nhân khác (VD cạnh tranh chung toàn thị trường).")
+
+            if any_ltv_kem:
+                st.divider()
+                st.subheader("Vì sao LTV thấp?")
+                st.markdown(
+                    "- 🔴 **LTV (ARPU D0) thấp hơn benchmark** ở (các) thị trường chính "
+                    "trong bảng trên — vấn đề GIÁ TRỊ NGƯỜI DÙNG (user vẫn cài nhưng "
+                    "không tạo đủ giá trị ở đúng thị trường đó)."
+                )
+                suggestions.append(cdoc.SUGGESTION_TEXT["arpu_kem"])
 
     if suggestions:
         st.divider()
@@ -1310,36 +1367,18 @@ def page_campaign_doctor():
     slice_tab1, slice_tab2, slice_tab3 = st.tabs(["Theo quốc gia", "Theo creative", "Theo khung giờ"])
 
     with slice_tab1:
-        st.caption("🔒 Cần token Adjust cá nhân — nhập ở sidebar bên trái.")
-        country_fetch_clicked = st.button("Tải dữ liệu theo quốc gia", key="doc_country_fetch")
-
-        if country_fetch_clicked:
-            country_raw, country_err, country_warning = load_campaign_country_data(
-                selected_campaign,
-                days_back_used,
-                st.session_state.get("adjust_app_tokens", ""),
-                st.session_state.get("adjust_api_token", ""),
-            )
-            st.session_state.doc_country_raw = country_raw
-            st.session_state.doc_country_err = country_err
-            st.session_state.doc_country_campaign = selected_campaign
-
-        # Dữ liệu đã tải có thể là của 1 campaign KHÁC (user đổi campaign ở
-        # dropdown trên nhưng chưa bấm tải lại) — phải kiểm tra, không thì hiện
-        # nhầm dữ liệu quốc gia của campaign cũ (đã lọc sẵn theo campaign lúc
-        # fetch, không tự động cập nhật khi đổi lựa chọn).
-        country_raw = st.session_state.get("doc_country_raw")
-        stale = st.session_state.get("doc_country_campaign") != selected_campaign
-        if st.session_state.get("doc_country_err"):
-            st.error(f"❌ {st.session_state.doc_country_err}")
-        elif country_raw is None or stale:
-            st.info("👆 Bấm **Tải dữ liệu theo quốc gia** để xem quốc gia nào đang kéo campaign này xuống.")
+        # ĐÃ BỎ nút "Tải dữ liệu theo quốc gia" (24/09/2026) — Tầng 2 ở trên
+        # giờ TỰ ĐỘNG tải `country_raw`/`benchmark_by_country` rồi (cache 15
+        # phút), tái dùng thẳng ở đây, không cần bấm thêm lần nữa.
+        if country_err:
+            st.error(f"❌ {country_err}")
+        elif country_raw is None or country_raw.empty:
+            st.caption("Chưa có dữ liệu theo quốc gia cho campaign này.")
         else:
             # Benchmark giờ nhập THEO QUỐC GIA (trang "Benchmark") — mỗi dòng
             # quốc gia trong bảng dưới đây so với ĐÚNG benchmark của chính nó
             # (khác app-level benchmark chung dùng trước 23/09/2026 — xem
             # docstring cdoc.country_slice() + benchmarks.get_all_country_benchmarks()).
-            benchmark_by_country = bm.get_all_country_benchmarks(product_id)
             country_df = cdoc.country_slice(country_raw, benchmark_by_country=benchmark_by_country)
             if country_df.empty:
                 st.warning("Không có dữ liệu theo quốc gia cho campaign này trong khoảng ngày đã kéo.")

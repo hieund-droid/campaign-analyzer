@@ -36,6 +36,24 @@ TẦNG 2 — nguyên nhân sâu hơn:
   benchmark — Retention thấp → vấn đề GIỮ CHÂN; Retention ổn nhưng ROAS D0
   thấp → vấn đề KIẾM TIỀN (monetization).
 
+TẦNG 2 — HỒI SINH 24/09/2026 với thiết kế MỚI (bản cũ dùng `tier1["cpi_dat"]`/
+`tier1["user_kem"]` của campaign gộp — từ 23/09/2026 benchmark Tầng 1 luôn
+rỗng nên 2 cờ này LUÔN False, Tầng 2 ÂM THẦM không hiện ra nữa, user phát
+hiện lại 24/09/2026). Bản mới KHÔNG dùng benchmark gộp cả campaign nữa — xem
+`top_markets_slice()`: tự lấy TOP N thị trường (quốc gia) đang TIÊU NHIỀU
+NHẤT trong CHÍNH campaign này, so CPI/LTV của MỖI thị trường đó với benchmark
+CỦA CHÍNH NÓ. Cách này chạy ĐÚNG cho CẢ campaign GLOBAL (nhiều thị trường quan
+trọng — mặc định xem top 3) LẪN campaign chạy lẻ 1 thị trường (top N tự nhiên
+co về đúng 1 dòng, các quốc gia khác quá ít install bị lọc) — không cần đoán
+GLOBAL hay không qua tên campaign.
+
+Cũng thêm `detect_phantom_revenue()` — phát hiện quốc gia có doanh thu
+(`ad_revenue`) dù KHÔNG có install nào trong campaign, giải thích 1 hiện
+tượng user gặp: campaign lẻ 1 thị trường (VD Mexico) có CPI/LTV của ĐÚNG thị
+trường đó không tốt, nhưng ROAS D0 GỘP CẢ CAMPAIGN vẫn ổn — vì có thêm doanh
+thu "lạ" từ 1 nước khác (VD US, dù US không hề có install nào trong campaign
+này) đang bù vào, KHÔNG PHẢI vì thị trường chính đang tốt thật.
+
 CẮT LÁT: theo quốc gia (dùng lại dữ liệu Adjust đã kéo, group theo country)
 và theo creative (cần gọi thêm 1 lần Adjust API riêng — xem
 adjust_client.fetch_creative_summary(), dimension "creative_network" đã
@@ -214,6 +232,73 @@ def country_slice(
         ] if c in df.columns
     ]
     return df[cols].sort_values("ROAS D0").reset_index(drop=True)
+
+
+def top_markets_slice(
+    campaign_country_df: pd.DataFrame,
+    benchmark_by_country: dict | None = None,
+    top_n: int = 3,
+    min_installs: int = 5,
+) -> pd.DataFrame:
+    """TẦNG 2 MỚI (24/09/2026, theo yêu cầu user): thay vì đánh giá CPI/LTV gộp
+    CẢ campaign (Tầng 1 — bị pha loãng nếu campaign chạy GLOBAL nhiều nước),
+    chỉ soi TOP `top_n` thị trường đang TIÊU NHIỀU NHẤT (network_cost) trong
+    CHÍNH campaign này, mỗi thị trường so với ĐÚNG benchmark của nó.
+
+    KHÔNG cần biết trước campaign là GLOBAL hay chạy lẻ 1 thị trường — cách
+    này tự nhiên co về ĐÚNG 1 dòng cho campaign lẻ (các quốc gia khác quá ít
+    install bị `min_installs` lọc bỏ), và ra ĐÚNG top N thị trường quan trọng
+    cho campaign GLOBAL — không cần đoán qua tên campaign.
+
+    Tái dùng `country_slice()` để có sẵn CPI/LTV (ARPU D0)/ROAS D0/Retention D1/
+    so-benchmark/Cảnh báo cho mỗi quốc gia, chỉ lọc lại còn đúng top N theo chi
+    tiêu (network_cost) — thứ tự ROAS D0 thấp nhất lên đầu vẫn giữ nguyên
+    (kế thừa từ country_slice(), lọc bằng isin không đổi thứ tự)."""
+    full = country_slice(campaign_country_df, min_installs=min_installs, benchmark_by_country=benchmark_by_country)
+    if full.empty or campaign_country_df is None or campaign_country_df.empty:
+        return full
+
+    df = campaign_country_df.copy()
+    df["installs"] = pd.to_numeric(df["installs"], errors="coerce").fillna(0)
+    df["network_cost"] = pd.to_numeric(df["network_cost"], errors="coerce").fillna(0)
+    df = df[df["installs"] >= min_installs]
+    top_countries = (
+        df.groupby("country")["network_cost"].sum().sort_values(ascending=False).head(top_n).index.tolist()
+    )
+    return full[full["Quốc gia"].isin(top_countries)].reset_index(drop=True)
+
+
+def detect_phantom_revenue(campaign_country_df: pd.DataFrame, min_revenue: float = 0.01) -> pd.DataFrame:
+    """THÊM 24/09/2026 (theo yêu cầu user): tìm quốc gia có `ad_revenue` > 0
+    nhưng KHÔNG có install nào (installs == 0) trong CHÍNH campaign này —
+    dấu hiệu doanh thu "lạ" đến từ NGOÀI thị trường mục tiêu (VD user đổi vị
+    trí/di chuyển sau khi cài, hoặc Adjust gán quốc gia theo nơi PHÁT SINH sự
+    kiện thay vì nơi cài — không phải bug của tool).
+
+    Hữu ích để giải thích 1 hiện tượng cụ thể user gặp: campaign chạy lẻ 1
+    thị trường (VD Mexico) có CPI/LTV CỦA ĐÚNG THỊ TRƯỜNG ĐÓ không tốt, nhưng
+    ROAS D0 GỘP CẢ CAMPAIGN vẫn ổn — vì có thêm doanh thu từ 1 nước khác (VD
+    US) dù nước đó không hề có install nào trong campaign — số ROAS D0 gộp
+    đang được "bù" bởi doanh thu ngoài thị trường chính, không phải vì thị
+    trường chính đang tốt.
+
+    Dùng `ad_revenue` (tổng doanh thu THẬT của cả khoảng ngày, metric có sẵn
+    trong METRICS của adjust_client.py — không phải suy ra từ roas_ad_d0, vì
+    installs=0 sẽ khiến các tỉ lệ suy ra vô nghĩa/NaN)."""
+    if campaign_country_df is None or campaign_country_df.empty:
+        return pd.DataFrame()
+    df = campaign_country_df.copy()
+    df["installs"] = pd.to_numeric(df["installs"], errors="coerce").fillna(0)
+    df["ad_revenue"] = pd.to_numeric(df["ad_revenue"], errors="coerce").fillna(0)
+    phantom = df[(df["installs"] == 0) & (df["ad_revenue"] > min_revenue)]
+    if phantom.empty:
+        return pd.DataFrame()
+    return (
+        phantom[["country", "ad_revenue"]]
+        .rename(columns={"country": "Quốc gia", "ad_revenue": "Doanh thu (không có install)"})
+        .sort_values("Doanh thu (không có install)", ascending=False)
+        .reset_index(drop=True)
+    )
 
 
 def creative_slice(creative_df: pd.DataFrame, campaign: str) -> pd.DataFrame:

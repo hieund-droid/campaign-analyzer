@@ -836,10 +836,11 @@ def page_alerts():
         "GHI_CHU_TIEN_DO.md để biết chi tiết."
     )
     al_realtime_pct = st.number_input(
-        "Mức LTV giảm cần báo động (%)",
+        "Mức LTV thay đổi cần báo động (%)",
         min_value=5, value=20, step=5, key="al_realtime_pct",
-        help="So với các mốc 1/2/3/6 tiếng trước — VD để 20 nghĩa là LTV tụt "
-        "từ 20% trở lên mới hiện cảnh báo.",
+        help="So với các mốc 1/2/3/6 tiếng trước — bắt CẢ 2 CHIỀU (đổi "
+        "24/09/2026): LTV tăng HOẶC giảm từ mức này trở lên đều hiện cảnh "
+        "báo, để vừa phát hiện vấn đề vừa phát hiện cơ hội tăng ngân sách.",
     )
 
     hourly_df = st.session_state.al_hourly_df
@@ -935,7 +936,8 @@ def page_alerts():
                     if _diag_qualifying_n > 0:
                         _diag_parts.append(
                             f"{_diag_qualifying_n} campaign đủ điều kiện — KHÔNG campaign nào trong "
-                            f"số này LTV giảm quá {int(al_realtime_pct)}% ở bất kỳ mốc 1/2/3/6 tiếng nào."
+                            f"số này LTV đổi (tăng hoặc giảm) quá {int(al_realtime_pct)}% ở bất kỳ "
+                            "mốc 1/2/3/6 tiếng nào."
                         )
             st.info(" ".join(_diag_parts))
     else:
@@ -949,6 +951,7 @@ def page_alerts():
             {
                 "Campaign": f["campaign"],
                 "Nguồn": _channel_map.get(f["campaign"], "?"),
+                "Chiều": "📈 Tăng" if f["direction"] == "tang" else "📉 Giảm",
                 "So với ~mấy tiếng trước": f"{f['actual_hours_gap']:.1f}h",
                 "Lúc đó": f["baseline_ts"][11:16],
                 _now_or_end_label: f["latest_ts"][11:16],
@@ -969,10 +972,11 @@ def page_alerts():
             },
         )
         st.caption(
-            "Mỗi campaign hiện mốc so sánh cho thấy LTV giảm NHIỀU NHẤT (trong "
-            "số 1/2/3/6 tiếng trước, tự động chọn giờ gần mốc đó nhất). Bảng "
-            "này CHỈ liệt kê campaign LTV GIẢM vượt ngưỡng (đây là bảng cảnh "
-            "báo vấn đề) — campaign LTV tăng không hiện ở đây, không phải bị bỏ sót."
+            "Mỗi campaign hiện mốc so sánh cho thấy LTV đổi NHIỀU NHẤT (trong "
+            "số 1/2/3/6 tiếng trước, tự động chọn giờ gần mốc đó nhất) — CẢ 2 "
+            "chiều tăng/giảm (đổi 24/09/2026) — cột \"Chiều\" cho biết đang là "
+            "cơ hội (📈 tăng) hay vấn đề (📉 giảm). Vào trang **Xét nghiệm** để "
+            "xem gợi ý hành động tương ứng."
         )
 
     st.divider()
@@ -1000,6 +1004,7 @@ def page_alerts():
             {
                 "Campaign": f["campaign"],
                 "Nguồn": _channel_map.get(f["campaign"], "?"),
+                "Chiều": "📈 Tăng" if f["direction"] == "tang" else "📉 Giảm",
                 f"Lúc ~{int(al_since_hour):02d}h": f["baseline_ts"][11:16],
                 _now_or_end_label: f["latest_ts"][11:16],
                 "Installs lúc đó": f["baseline"].get("installs_cum"),
@@ -1055,17 +1060,53 @@ def page_campaign_doctor():
     campaign_options = [f["campaign"] for f in realtime_flagged]
 
     def _flags_label(f: dict) -> str:
-        # ĐỔI 23/09/2026: Cảnh báo trong ngày giờ CHỈ còn gắn cờ theo LTV (đã
-        # bỏ CPI/ROAS theo giờ — xem intraday_alerts.py) nên chỉ còn 1 nhãn.
-        return "LTV giảm" if f.get("arpu_bad") else "?"
+        # ĐỔI 24/09/2026: Cảnh báo trong ngày giờ bắt CẢ 2 CHIỀU LTV tăng/giảm
+        # (xem intraday_alerts.py) — nhãn phản ánh đúng chiều.
+        return "📈 LTV tăng" if f.get("direction") == "tang" else "📉 LTV giảm"
 
     label_map = {f["campaign"]: _flags_label(f) for f in realtime_flagged}
+    flag_by_campaign = {f["campaign"]: f for f in realtime_flagged}
     selected_campaign = st.selectbox(
         f"Chọn campaign cần xét nghiệm (app {product_id}, {len(campaign_options)} campaign đang bị cảnh báo trong ngày)",
         campaign_options,
         format_func=lambda c: f"[{label_map[c]}] {c[:70]}{'...' if len(c) > 70 else ''}",
         key="doc_selected_campaign",
     )
+
+    # THÊM 24/09/2026 (theo yêu cầu user): gợi ý HÀNH ĐỘNG dựa trên CHIỀU của
+    # tín hiệu realtime đưa campaign này vào đây — tách biệt với Tầng 1 (vốn
+    # so benchmark theo NGÀY/QUỐC GIA, không liên quan tín hiệu trong ngày).
+    _flag = flag_by_campaign[selected_campaign]
+    _pct = _flag.get("arpu_pct_change") or 0
+    _gap = _flag.get("actual_hours_gap")
+    if _flag.get("direction") == "tang":
+        st.success(
+            f"📈 **LTV đang TĂNG {_pct:.1f}%** trong khoảng ~{_gap:.1f} tiếng qua "
+            f"({_flag['baseline_ts'][11:16]} → {_flag['latest_ts'][11:16]}) — tín hiệu TỐT."
+        )
+        st.markdown(
+            "**Gợi ý hành động:**\n"
+            "- Cân nhắc **tăng ngân sách ngay trong ngày** để tận dụng thời điểm "
+            "LTV cao — chờ đến hôm sau có thể lỡ mất giai đoạn tốt.\n"
+            "- Xem **cắt lát quốc gia/creative** bên dưới để biết ĐÚNG nước/creative "
+            "nào đang kéo LTV lên — ưu tiên nhân rộng đúng chỗ đó thay vì tăng "
+            "ngân sách dàn trải cho cả campaign."
+        )
+    else:
+        st.warning(
+            f"📉 **LTV đang GIẢM {_pct:.1f}%** trong khoảng ~{_gap:.1f} tiếng qua "
+            f"({_flag['baseline_ts'][11:16]} → {_flag['latest_ts'][11:16]}) — cần theo dõi sát."
+        )
+        st.markdown(
+            "**Gợi ý hành động:**\n"
+            "- Cân nhắc **tạm giảm ngân sách** hoặc theo dõi thêm 1-2 mốc giờ "
+            "nữa trước khi cắt hẳn — nếu đang xem \"hôm nay\", LTV cuối ngày có "
+            "thể tạm thấp chỉ vì installs mới chưa kịp sinh doanh thu (không "
+            "phải chất lượng user tệ thật), xem lại với ngày đã qua lâu hơn để "
+            "chắc chắn.\n"
+            "- Xem **cắt lát quốc gia/creative** bên dưới để biết ĐÚNG nước/"
+            "creative nào đang kéo xuống trước khi quyết định cắt cả campaign."
+        )
 
     # Benchmark ĐỔI sang nhập THEO QUỐC GIA (23/09/2026, trang "Benchmark") —
     # Tầng 1 (đánh giá CẢ campaign, gộp mọi quốc gia) KHÔNG còn 1 benchmark

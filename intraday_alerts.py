@@ -122,18 +122,24 @@ def compare_since_hour(cum_df: pd.DataFrame, app: str, campaign: str, baseline_h
 
 
 def _flag_entry(app: str, campaign: str, cmp: dict, threshold_pct: float, min_installs: int, target_label) -> dict | None:
-    """ĐIỀU KIỆN GẮN CỜ: LTV giảm vượt threshold_pct% — CHỈ còn chỉ số này
-    (đã bỏ CPI/ROAS theo giờ hoàn toàn, xem docstring đầu file)."""
+    """ĐIỀU KIỆN GẮN CỜ: LTV đổi (TĂNG hoặc GIẢM) vượt threshold_pct% — CẢ 2
+    CHIỀU (đổi 24/09/2026, theo yêu cầu user: muốn biết cả lúc LTV tăng để
+    gợi ý hành động tương ứng ở Xét nghiệm — VD tăng ngân sách khi LTV tăng,
+    không chỉ cảnh báo lúc giảm). Thêm field `direction` ("tang"/"giam") để
+    nơi gọi (app.py, campaign_doctor.py) biết chiều nào mà gợi ý đúng hành
+    động."""
     if cmp is None:
         return None
     if min_installs and (cmp["latest"].get("installs_cum") or 0) < min_installs:
         return None
-    arpu_bad = cmp["arpu_pct_change"] is not None and cmp["arpu_pct_change"] <= -threshold_pct
-    if not arpu_bad:
+    pct = cmp["arpu_pct_change"]
+    if pct is None or abs(pct) < threshold_pct:
         return None
+    direction = "giam" if pct < 0 else "tang"
     return {
         "app": app, "campaign": campaign, "target": target_label,
-        "arpu_bad": arpu_bad,
+        "arpu_bad": direction == "giam",  # giữ tên cũ để tương thích ngược
+        "direction": direction,
         **cmp,
     }
 
@@ -145,9 +151,9 @@ def list_flagged_hours_ago(
     min_installs: int = 0,
 ) -> list:
     """CẢNH BÁO TRONG NGÀY — kiểm tra các mốc 1/2/3/6 tiếng trước (mặc định),
-    gắn cờ nếu BẤT KỲ mốc nào cho thấy LTV GIẢM vượt threshold_pct%. Mỗi
-    campaign chỉ trả về 1 dòng — chọn mốc có LTV giảm NHIỀU NHẤT trong số đã
-    vượt ngưỡng."""
+    gắn cờ nếu BẤT KỲ mốc nào cho thấy LTV đổi (tăng HOẶC giảm) vượt
+    threshold_pct%. Mỗi campaign chỉ trả về 1 dòng — chọn mốc có LTV đổi
+    NHIỀU NHẤT (trị tuyệt đối lớn nhất, bất kể chiều) trong số đã vượt ngưỡng."""
     if cum_df is None or cum_df.empty:
         return []
     flagged = []
@@ -159,7 +165,7 @@ def list_flagged_hours_ago(
                 candidates.append(entry)
         if not candidates:
             continue
-        worst = min(candidates, key=lambda e: e.get("arpu_pct_change") if e.get("arpu_pct_change") is not None else 0)
+        worst = max(candidates, key=lambda e: abs(e.get("arpu_pct_change") or 0))
         flagged.append(worst)
     return sorted(flagged, key=lambda f: f.get("arpu_pct_change") or 0)
 
@@ -170,7 +176,8 @@ def list_flagged_since_hour(
     threshold_pct: float = 20.0,
     min_installs: int = 0,
 ) -> list:
-    """So với 1 GIỜ CỤ THỂ user tự chọn trong ngày (mặc định 8h)."""
+    """So với 1 GIỜ CỤ THỂ user tự chọn trong ngày (mặc định 8h) — cả 2 chiều
+    tăng/giảm, xem docstring _flag_entry()."""
     if cum_df is None or cum_df.empty:
         return []
     flagged = []

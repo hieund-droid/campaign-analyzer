@@ -108,10 +108,33 @@ def summarize_peak_and_low_hours(patterns_df: pd.DataFrame, top_n_hours: int = 3
             "Giờ đáy": ", ".join(f"{h:02d}h" for h in sorted(low["Giờ"])),
             "LTV giờ đáy (TB)": low_avg,
             "Chênh lệch (%)": diff_pct,
+            # Cột ẨN (bắt đầu bằng "_") — list giờ THÔ (không phải chuỗi hiển
+            # thị) để build_market_suggestions() tính giờ NÊN HÀNH ĐỘNG (sớm
+            # hơn giờ thực tế — xem hàm đó). app.py PHẢI bỏ 2 cột này trước
+            # khi hiện bảng ra UI (không phải dữ liệu để xem trực tiếp).
+            "_peak_hours": sorted(peak["Giờ"].tolist()),
+            "_low_hours": sorted(low["Giờ"].tolist()),
         })
     if not rows:
         return pd.DataFrame()
     return pd.DataFrame(rows).sort_values("Chênh lệch (%)", ascending=False).reset_index(drop=True)
+
+
+ACTION_LEAD_HOURS = 1
+
+
+def _format_hour_list(hours: list) -> str:
+    return ", ".join(f"{h:02d}h" for h in sorted(hours))
+
+
+def _shift_hours_earlier(hours: list, lead_hours: int = ACTION_LEAD_HOURS) -> list:
+    """Trừ `lead_hours` tiếng cho mỗi giờ (mod 24, qua nửa đêm vẫn đúng — VD
+    giờ 0 trừ 1 tiếng ra giờ 23). THÊM 24/09/2026 theo yêu cầu user: "nên
+    action sớm hơn tầm 1 tiếng, ví dụ đến giờ tiêu của Mỹ thì tăng trước 1
+    tiếng thì để vào giờ tiêu bid căng là vừa" — bid/ngân sách cần thời gian
+    "làm nóng" trên hệ thống đấu giá của network, tăng/giảm ĐÚNG lúc LTV đổi
+    thường đã trễ mất phần đầu khung giờ đó."""
+    return sorted({(h - lead_hours) % 24 for h in hours})
 
 
 def build_market_suggestions(summary_df: pd.DataFrame) -> list:
@@ -121,7 +144,12 @@ def build_market_suggestions(summary_df: pd.DataFrame) -> list:
     — tăng ngân sách vào ĐÚNG khung giờ vàng của thị trường đó, giảm vào ĐÚNG
     khung giờ đáy — thay vì chỉ 1 caption chung chung áp dụng mọi thị trường
     như nhau. Giữ nguyên thứ tự `summary_df` (đã sắp chênh lệch cao nhất lên
-    đầu — đáng làm nhất trước)."""
+    đầu — đáng làm nhất trước).
+
+    SỬA 24/09/2026 — HÀNH ĐỘNG SỚM HƠN `ACTION_LEAD_HOURS` (mặc định 1) tiếng
+    so với khung giờ vàng/đáy THỰC TẾ (xem docstring _shift_hours_earlier()):
+    câu gợi ý giờ nêu RÕ CẢ HAI — giờ NÊN HÀNH ĐỘNG (sớm hơn) và khung giờ LTV
+    thực tế quan sát được (để biết vì sao lại chọn giờ đó)."""
     if summary_df is None or summary_df.empty:
         return []
     # LƯU Ý escape "\$" (KHÔNG để "$" trần) — Streamlit render markdown coi 2
@@ -129,15 +157,20 @@ def build_market_suggestions(summary_df: pd.DataFrame) -> list:
     # thức LaTeX, nuốt mất chữ ở giữa (kể cả **bold**) — đã gặp lỗi thật
     # (24/09/2026, user chụp ảnh chỉ ra "**giảm**" hiện nguyên văn không in
     # đậm, dấu "$" biến mất) do câu gợi ý có 2 số tiền "$X" trong 1 câu.
-    return [
-        {
+    rows = []
+    for _, r in summary_df.iterrows():
+        peak_action = _format_hour_list(_shift_hours_earlier(r["_peak_hours"]))
+        low_action = _format_hour_list(_shift_hours_earlier(r["_low_hours"]))
+        rows.append({
             "Quốc gia": r["Quốc gia"],
             "Gợi ý": (
-                f"**Tăng** ngân sách/bid vào khung **{r['Giờ vàng']}** (LTV TB "
-                f"\\${r['LTV giờ vàng (TB)']:.4f}) — **giảm**/dồn ngân sách khỏi "
-                f"khung **{r['Giờ đáy']}** (LTV TB \\${r['LTV giờ đáy (TB)']:.4f}) "
-                f"— chênh lệch {r['Chênh lệch (%)'] * 100:.0f}%."
+                f"**Tăng** ngân sách/bid vào khung **{peak_action}** (đón đầu "
+                f"{ACTION_LEAD_HOURS} tiếng trước khung LTV thực tế cao "
+                f"**{r['Giờ vàng']}**, LTV TB \\${r['LTV giờ vàng (TB)']:.4f}) "
+                f"— **giảm**/dồn ngân sách khỏi khung **{low_action}** (đón "
+                f"đầu trước khung LTV thực tế thấp **{r['Giờ đáy']}**, LTV TB "
+                f"\\${r['LTV giờ đáy (TB)']:.4f}) — chênh lệch "
+                f"{r['Chênh lệch (%)'] * 100:.0f}%."
             ),
-        }
-        for _, r in summary_df.iterrows()
-    ]
+        })
+    return rows

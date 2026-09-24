@@ -213,7 +213,8 @@ with st.sidebar:
 # ══════════════════════════════════════════════════════════════════════
 @st.cache_data(ttl=15 * 60, show_spinner="Đang lấy dữ liệu từ Adjust...")
 def load_adjust_data(
-    days_back: int, app_tokens_raw: str, api_token: str, include_today: bool = False, include_country: bool = True
+    days_back: int, app_tokens_raw: str, api_token: str, include_today: bool = False, include_country: bool = True,
+    end_date_str: str | None = None,
 ):
     # QUAN TRỌNG: api_token + app_tokens_raw PHẢI là tham số của hàm (không đọc
     # secret/session ngầm bên trong) — Streamlit chỉ cache dựa theo tham số truyền
@@ -222,14 +223,32 @@ def load_adjust_data(
     # include_country=False (trang Cảnh báo, 22/09/2026 — sửa timeout): bỏ cột
     # "country" khỏi truy vấn giảm ~65% thời gian, ~93% số dòng (đã đo thật) —
     # Cảnh báo không cần grain quốc gia (build_campaign_daily gộp campaign+day).
+    #
+    # end_date_str: THÊM 24/09/2026 — SỬA BUG "Không tìm thấy dữ liệu Adjust
+    # cho campaign này" xảy ra với TẤT CẢ campaign ở trang Xét nghiệm/Theo
+    # campaign khi user chọn xem 1 ngày (`al_view_date` ở trang Cảnh báo) XA
+    # HƠN "Khoảng ngày kéo" (days_back, mặc định 14 ngày). Nguyên nhân: bảng
+    # chi tiết theo NGÀY (dùng cho Tầng 1/Tầng 2) trước đây LUÔN kết thúc ở
+    # "hôm qua" (neo theo NGÀY HIỆN TẠI, không liên quan gì tới ngày đang xem
+    # ở Cảnh báo) — nếu `al_view_date` cũ hơn cửa sổ N ngày đó, MỌI campaign
+    # được cảnh báo ở ngày đó đều KHÔNG có mặt trong bảng chi tiết → luôn báo
+    # "không tìm thấy dữ liệu". SỬA: khi có `end_date_str`, neo cửa sổ ngày
+    # kết thúc ĐÚNG NGÀY ĐÓ (không phải "hôm qua") — đảm bảo campaign đang
+    # xem chắc chắn nằm trong cửa sổ.
     if not api_token or not app_tokens_raw:
         return None, "Thiếu API Token / App Token.", None
 
     app_tokens = ac.parse_app_tokens(app_tokens_raw)
+    extra_params = None
+    if end_date_str:
+        end_d = date.fromisoformat(end_date_str)
+        start_d = end_d - timedelta(days=days_back - 1)
+        extra_params = {"date_period": f"{start_d.isoformat()}:{end_d.isoformat()}"}
     try:
         data = ac.fetch_detail(
             api_token, app_tokens, days_back=days_back, exit_on_error=False,
             include_today=include_today, include_country=include_country,
+            extra_params=extra_params,
         )
     except Exception as e:  # noqa: BLE001
         return None, f"Lỗi gọi Adjust API: {e}", None
@@ -792,12 +811,21 @@ def page_alerts():
         st.session_state.al_view_date_used = None
 
     if al_fetch_clicked:
+        al_view_date_str = al_view_date.isoformat()
+
         # Phần ngày ĐÃ CHỐT (không lấy hôm nay) — dùng cho trang "Xét nghiệm"
         # (tầng 1/tầng 2 so benchmark + peer average). Phần "trong ngày" giờ
         # kéo RIÊNG bằng dimension "hour" (xem intraday_alerts.py — thay thế
         # hẳn cơ chế "chụp snapshot" cũ, KHÔNG cần lưu trữ/chạy ngầm gì nữa).
+        #
+        # end_date_str=al_view_date_str (THÊM 24/09/2026 — sửa bug "Không tìm
+        # thấy dữ liệu Adjust cho campaign này" xảy ra với MỌI campaign khi
+        # xem 1 ngày xa hơn "Khoảng ngày kéo": neo cửa sổ N ngày này kết thúc
+        # ĐÚNG ngày đang xem, không phải luôn "hôm qua" — xem docstring
+        # load_adjust_data()).
         adjust_df, adjust_err, adjust_warning = load_adjust_data(
-            al_days_back, al_app_tokens_raw, al_api_token, include_today=False, include_country=False
+            al_days_back, al_app_tokens_raw, al_api_token, include_today=False, include_country=False,
+            end_date_str=al_view_date_str,
         )
         st.session_state.al_warning = adjust_warning
         if adjust_err:
@@ -809,7 +837,6 @@ def page_alerts():
             st.session_state.al_product_used = al_product_id
             st.session_state.al_days_back_used = al_days_back
 
-        al_view_date_str = al_view_date.isoformat()
         hourly_df, hourly_err = load_hourly_data(al_app_tokens_raw, al_api_token, al_view_date_str)
         st.session_state.al_hourly_df = hourly_df
         st.session_state.al_hourly_err = hourly_err
@@ -862,10 +889,11 @@ def page_alerts():
     al_realtime_pct = st.number_input(
         "Mức LTV thay đổi cần báo động (%)",
         min_value=5, value=20, step=5, key="al_realtime_pct",
-        help="Mỗi campaign tự so với giờ nào trong ngày cho LTV đổi NHIỀU "
-        "NHẤT (không ép chung 1 mốc cho mọi campaign) — bắt CẢ 2 CHIỀU: LTV "
-        "tăng HOẶC giảm từ mức này trở lên đều hiện cảnh báo, để vừa phát "
-        "hiện vấn đề vừa phát hiện cơ hội tăng ngân sách.",
+        help="Mỗi campaign tự so với giờ nào trong tối đa 6 tiếng trước cho "
+        "LTV đổi NHIỀU NHẤT (không ép chung 1 mốc cho mọi campaign, nhưng "
+        "cũng không so quá xa — tránh so cả gần 1 ngày ra kết luận mơ hồ) — "
+        "bắt CẢ 2 CHIỀU: LTV tăng HOẶC giảm từ mức này trở lên đều hiện cảnh "
+        "báo, để vừa phát hiện vấn đề vừa phát hiện cơ hội tăng ngân sách.",
     )
 
     hourly_df = st.session_state.al_hourly_df
@@ -971,7 +999,7 @@ def page_alerts():
                         _diag_parts.append(
                             f"{_diag_qualifying_n} campaign đủ điều kiện — KHÔNG campaign nào trong "
                             f"số này LTV đổi (tăng hoặc giảm) quá {int(al_realtime_pct)}% dù đã tự so "
-                            "với mọi giờ khác trong ngày (đã quét toàn bộ, không chỉ vài mốc cố định)."
+                            "với mọi giờ trong tối đa 6 tiếng trước (tự chọn giờ, không ép mốc cố định)."
                         )
             st.info(" ".join(_diag_parts))
     else:
@@ -1008,12 +1036,13 @@ def page_alerts():
             },
         )
         st.caption(
-            "Mỗi campaign TỰ quét toàn bộ giờ nó có dữ liệu trong ngày để tìm "
-            "cặp giờ cho LTV đổi NHIỀU NHẤT (không ép cùng 1 mốc cho mọi "
-            "campaign nữa — đổi 24/09/2026) — cột \"Khoảng cách (tự chọn)\" "
-            "cho biết campaign đó cách nhau bao nhiêu tiếng. Cột \"Chiều\" cho "
-            "biết đang là cơ hội (📈 tăng) hay vấn đề (📉 giảm). Vào trang "
-            "**Xét nghiệm** để xem gợi ý hành động tương ứng."
+            "Mỗi campaign TỰ quét giờ nó có dữ liệu trong TỐI ĐA 6 tiếng "
+            "trước để tìm cặp giờ cho LTV đổi NHIỀU NHẤT (không ép cùng 1 "
+            "mốc cho mọi campaign, nhưng cũng không so quá xa cả ngày — đổi "
+            "24/09/2026) — cột \"Khoảng cách (tự chọn)\" cho biết campaign đó "
+            "cách nhau bao nhiêu tiếng. Cột \"Chiều\" cho biết đang là cơ hội "
+            "(📈 tăng) hay vấn đề (📉 giảm). Vào trang **Xét nghiệm** để xem "
+            "gợi ý hành động tương ứng."
         )
 
     st.divider()
@@ -1529,8 +1558,12 @@ def page_market_overview():
                     "vàng/giờ đáy — thử tăng số ngày gộp lại."
                 )
             else:
+                # Bỏ 2 cột ẨN "_peak_hours"/"_low_hours" (list giờ thô, chỉ để
+                # build_market_suggestions() tính giờ nên hành động — không
+                # phải dữ liệu để hiện trực tiếp) trước khi hiện bảng ra UI.
                 st.dataframe(
-                    summary, width="stretch", hide_index=True,
+                    summary.drop(columns=["_peak_hours", "_low_hours"]),
+                    width="stretch", hide_index=True,
                     column_config={
                         "LTV giờ vàng (TB)": st.column_config.NumberColumn(format="$%.4f"),
                         "LTV giờ đáy (TB)": st.column_config.NumberColumn(format="$%.4f"),

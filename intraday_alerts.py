@@ -101,17 +101,36 @@ def _compare_to_target(cum_df: pd.DataFrame, app: str, campaign: str, target_dt:
     }
 
 
-def find_best_swing(cum_df: pd.DataFrame, app: str, campaign: str, min_installs: int = 0) -> dict | None:
+DEFAULT_MAX_GAP_HOURS = 6.0
+
+
+def find_best_swing(
+    cum_df: pd.DataFrame,
+    app: str,
+    campaign: str,
+    min_installs: int = 0,
+    max_gap_hours: float = DEFAULT_MAX_GAP_HOURS,
+) -> dict | None:
     """THAY THẾ bộ mốc CỐ ĐỊNH (1/2/3/6 tiếng trước, áp dụng chung cho MỌI
     campaign) — đổi 24/09/2026 theo yêu cầu user ("mốc cố định quá cứng
     nhắc, có tự flex và phân tích riêng từng camp được không").
 
-    Tự quét TẤT CẢ các giờ campaign này ĐÃ CÓ DỮ LIỆU trong ngày làm baseline
-    (không giới hạn vào 1 bộ mốc giờ định sẵn), so mỗi giờ đó với giờ MỚI
-    NHẤT (cuối ngày), rồi chọn ra cặp cho LTV đổi NHIỀU NHẤT (trị tuyệt đối).
-    Nhờ vậy mỗi campaign tự "tìm" mốc so sánh khớp với chính nhịp biến động
-    của nó — campaign nào chỉ biến động rõ giữa giờ 7 và giờ 12 vẫn bắt được,
-    dù khoảng cách đó không nằm trong bộ mốc cố định nào.
+    Tự quét các giờ campaign này ĐÃ CÓ DỮ LIỆU trong ngày làm baseline (không
+    giới hạn vào 1 bộ mốc giờ định sẵn), so mỗi giờ đó với giờ MỚI NHẤT (cuối
+    ngày), rồi chọn ra cặp cho LTV đổi NHIỀU NHẤT (trị tuyệt đối). Nhờ vậy
+    mỗi campaign tự "tìm" mốc so sánh khớp với chính nhịp biến động của nó —
+    campaign nào chỉ biến động rõ giữa giờ 7 và giờ 12 vẫn bắt được, dù
+    khoảng cách đó không nằm trong bộ mốc cố định nào.
+
+    GIỚI HẠN `max_gap_hours` (mặc định 6 tiếng, THÊM 24/09/2026 — user chỉ ra
+    so trong khoảng 18 tiếng "quá rộng, không mang nhiều ý nghĩa, cần chi
+    tiết theo khung giờ hơn"): CHỈ xét baseline cách giờ mới nhất tối đa
+    `max_gap_hours` tiếng — nếu quét KHÔNG giới hạn, thuật toán có thể chọn
+    1 cặp cách nhau gần cả ngày (VD 18-20 tiếng) vì tình cờ % đổi lớn nhất,
+    nhưng khoảng đó quá dài để dùng cho hành động BID/ngân sách cụ thể (LTV
+    "đổi" qua gần cả ngày không nói lên khung giờ NÀO mới là vấn đề thật).
+    Giới hạn này giữ được tinh thần "tự flex" (không ép về đúng 1/2/3/6 tiếng
+    cố định) nhưng vẫn đảm bảo kết quả đủ CHI TIẾT/CỤ THỂ theo khung giờ.
 
     Bỏ qua baseline nào có installs_cum dưới `min_installs` — so với 1 giờ
     đầu ngày gần như trống (0-1 install) ra % đổi cực đoan là nhiễu do mẫu
@@ -127,6 +146,9 @@ def find_best_swing(cum_df: pd.DataFrame, app: str, campaign: str, min_installs:
 
     best = None
     for h in hours_sorted[:-1]:
+        gap = (latest_dt - datetime.fromisoformat(h)).total_seconds() / 3600
+        if max_gap_hours and gap > max_gap_hours:
+            continue
         baseline = g[g["hour"] == h].iloc[0]
         if min_installs and (baseline.get("installs_cum") or 0) < min_installs:
             continue
@@ -134,7 +156,6 @@ def find_best_swing(cum_df: pd.DataFrame, app: str, campaign: str, min_installs:
         if pct is None:
             continue
         if best is None or abs(pct) > abs(best["arpu_pct_change"]):
-            gap = (latest_dt - datetime.fromisoformat(h)).total_seconds() / 3600
             best = {
                 "baseline_ts": h,
                 "latest_ts": latest_hour,
@@ -186,16 +207,18 @@ def list_flagged_best_swing(
     cum_df: pd.DataFrame,
     threshold_pct: float = 20.0,
     min_installs: int = 0,
+    max_gap_hours: float = DEFAULT_MAX_GAP_HOURS,
 ) -> list:
     """CẢNH BÁO TRONG NGÀY — BẢN "TỰ FLEX" (thay hẳn bộ mốc cố định 1/2/3/6
-    tiếng cũ, xem docstring find_best_swing()). Mỗi campaign tự quét toàn bộ
-    giờ nó có dữ liệu để tìm cặp giờ cho LTV đổi (tăng HOẶC giảm) nhiều nhất,
-    gắn cờ nếu vượt threshold_pct%."""
+    tiếng cũ, xem docstring find_best_swing()). Mỗi campaign tự quét giờ nó
+    có dữ liệu (trong tối đa `max_gap_hours` tiếng trước giờ mới nhất) để
+    tìm cặp giờ cho LTV đổi (tăng HOẶC giảm) nhiều nhất, gắn cờ nếu vượt
+    threshold_pct%."""
     if cum_df is None or cum_df.empty:
         return []
     flagged = []
     for (app, campaign), _ in cum_df.groupby(["app", "campaign"]):
-        cmp = find_best_swing(cum_df, app, campaign, min_installs)
+        cmp = find_best_swing(cum_df, app, campaign, min_installs, max_gap_hours)
         entry = _flag_entry(app, campaign, cmp, threshold_pct, min_installs, "auto")
         if entry:
             flagged.append(entry)

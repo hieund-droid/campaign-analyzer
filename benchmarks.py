@@ -58,13 +58,29 @@ def _get_credentials_info() -> dict | None:
 
 
 def _get_sheet_id() -> str | None:
+    """Đọc BENCHMARK_SHEET_ID từ biến môi trường HOẶC Streamlit Secrets.
+
+    THÊM 23/09/2026 — cũng tự dò trong `[gcp_service_account]`: nếu user lỡ
+    dán `BENCHMARK_SHEET_ID = "..."` ở CUỐI ô Secrets (SAU dòng
+    `[gcp_service_account]`), theo cú pháp TOML nó sẽ bị hiểu nhầm thành 1
+    field NẰM TRONG bảng đó (mọi dòng key=value sau 1 tiêu đề [bảng] đều
+    thuộc về bảng đó cho đến tiêu đề [bảng] tiếp theo) — đã gặp lỗi thật vì
+    hướng dẫn "thêm ở đầu hoặc cuối" không nói rõ vị trí bắt buộc phải TRƯỚC
+    dòng [gcp_service_account]. Dò thêm chỗ này để không cần user phải sửa
+    lại Secrets, dù cách đúng vẫn là đặt ở ĐẦU."""
     sheet_id = os.environ.get("BENCHMARK_SHEET_ID")
     if sheet_id:
         return sheet_id
     try:
-        return st.secrets.get("BENCHMARK_SHEET_ID")
+        sheet_id = st.secrets.get("BENCHMARK_SHEET_ID")
+        if sheet_id:
+            return sheet_id
+        gcp = st.secrets.get("gcp_service_account")
+        if gcp:
+            return gcp.get("BENCHMARK_SHEET_ID")
     except Exception:  # noqa: BLE001
         return None
+    return None
 
 
 @st.cache_resource(show_spinner=False)

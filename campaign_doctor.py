@@ -173,7 +173,7 @@ def country_slice(
         return pd.DataFrame()
 
     df = campaign_country_df.copy()
-    for col in ("installs", "ecpi_all", "roas_ad_d0", "retention_rate_d1"):
+    for col in ("installs", "ecpi_all", "roas_ad_d0", "retention_rate_d1", "ad_revenue"):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
@@ -216,6 +216,7 @@ def country_slice(
         columns={
             "country": "Quốc gia",
             "installs": "Installs",
+            "ad_revenue": "Doanh thu",
             "ecpi_all": "CPI",
             "arpu_d0": "LTV (ARPU D0)",
             "roas_ad_d0": "ROAS D0",
@@ -225,9 +226,14 @@ def country_slice(
             "_canh_bao": "Cảnh báo",
         }
     )
+    # THÊM 24/09/2026 (theo yêu cầu user — "thêm cả rev vào thì mới nhìn
+    # được"): "Doanh thu" = tổng ad_revenue THẬT của cả khoảng ngày cho đúng
+    # quốc gia đó (KHÔNG suy ra từ ROAS D0 × CPI như "LTV (ARPU D0)" — đây là
+    # số THÔ, giúp thấy ngay quốc gia nào đang đóng góp nhiều/ít tiền thật,
+    # tách biệt với CPI/LTV vốn là số TRUNG BÌNH trên mỗi install).
     cols = [
         c for c in [
-            "Quốc gia", "Installs", "CPI", "LTV (ARPU D0)", "ROAS D0", "Retention D1",
+            "Quốc gia", "Installs", "Doanh thu", "CPI", "LTV (ARPU D0)", "ROAS D0", "Retention D1",
             "CPI so benchmark", "LTV so benchmark", "Cảnh báo",
         ] if c in df.columns
     ]

@@ -1275,6 +1275,7 @@ def page_campaign_doctor():
             st.dataframe(
                 top_df, width="stretch", hide_index=True,
                 column_config={
+                    "Doanh thu": st.column_config.NumberColumn(format="$%.2f"),
                     "CPI": st.column_config.NumberColumn(format="$%.4f"),
                     "LTV (ARPU D0)": st.column_config.NumberColumn(format="$%.4f"),
                     "ROAS D0": st.column_config.NumberColumn(format="percent"),
@@ -1386,6 +1387,7 @@ def page_campaign_doctor():
                 st.dataframe(
                     country_df, width="stretch", hide_index=True,
                     column_config={
+                        "Doanh thu": st.column_config.NumberColumn(format="$%.2f"),
                         "CPI": st.column_config.NumberColumn(format="$%.4f"),
                         "LTV (ARPU D0)": st.column_config.NumberColumn(format="$%.4f"),
                         "ROAS D0": st.column_config.NumberColumn(format="percent"),

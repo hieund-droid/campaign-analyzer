@@ -862,9 +862,10 @@ def page_alerts():
     al_realtime_pct = st.number_input(
         "Mức LTV thay đổi cần báo động (%)",
         min_value=5, value=20, step=5, key="al_realtime_pct",
-        help="So với các mốc 1/2/3/6 tiếng trước — bắt CẢ 2 CHIỀU (đổi "
-        "24/09/2026): LTV tăng HOẶC giảm từ mức này trở lên đều hiện cảnh "
-        "báo, để vừa phát hiện vấn đề vừa phát hiện cơ hội tăng ngân sách.",
+        help="Mỗi campaign tự so với giờ nào trong ngày cho LTV đổi NHIỀU "
+        "NHẤT (không ép chung 1 mốc cho mọi campaign) — bắt CẢ 2 CHIỀU: LTV "
+        "tăng HOẶC giảm từ mức này trở lên đều hiện cảnh báo, để vừa phát "
+        "hiện vấn đề vừa phát hiện cơ hội tăng ngân sách.",
     )
 
     hourly_df = st.session_state.al_hourly_df
@@ -905,7 +906,7 @@ def page_alerts():
         if not _hourly_totals.empty:
             st.line_chart(_hourly_totals[["ltv"]])
 
-    all_flagged_today = ia.list_flagged_hours_ago(
+    all_flagged_today = ia.list_flagged_best_swing(
         cum_df_scope, threshold_pct=float(al_realtime_pct), min_installs=int(al_min_installs)
     )
     # Lưu lại để trang "Xét nghiệm" đọc danh sách campaign đang bị cảnh báo.
@@ -969,8 +970,8 @@ def page_alerts():
                     if _diag_qualifying_n > 0:
                         _diag_parts.append(
                             f"{_diag_qualifying_n} campaign đủ điều kiện — KHÔNG campaign nào trong "
-                            f"số này LTV đổi (tăng hoặc giảm) quá {int(al_realtime_pct)}% ở bất kỳ "
-                            "mốc 1/2/3/6 tiếng nào."
+                            f"số này LTV đổi (tăng hoặc giảm) quá {int(al_realtime_pct)}% dù đã tự so "
+                            "với mọi giờ khác trong ngày (đã quét toàn bộ, không chỉ vài mốc cố định)."
                         )
             st.info(" ".join(_diag_parts))
     else:
@@ -985,7 +986,7 @@ def page_alerts():
                 "Campaign": f["campaign"],
                 "Nguồn": _channel_map.get(f["campaign"], "?"),
                 "Chiều": "📈 Tăng" if f["direction"] == "tang" else "📉 Giảm",
-                "So với ~mấy tiếng trước": f"{f['actual_hours_gap']:.1f}h",
+                "Khoảng cách (tự chọn)": f"{f['actual_hours_gap']:.1f}h",
                 "Lúc đó": f["baseline_ts"][11:16],
                 _now_or_end_label: f["latest_ts"][11:16],
                 "Installs lúc đó": f["baseline"].get("installs_cum"),
@@ -1007,11 +1008,12 @@ def page_alerts():
             },
         )
         st.caption(
-            "Mỗi campaign hiện mốc so sánh cho thấy LTV đổi NHIỀU NHẤT (trong "
-            "số 1/2/3/6 tiếng trước, tự động chọn giờ gần mốc đó nhất) — CẢ 2 "
-            "chiều tăng/giảm (đổi 24/09/2026) — cột \"Chiều\" cho biết đang là "
-            "cơ hội (📈 tăng) hay vấn đề (📉 giảm). Vào trang **Xét nghiệm** để "
-            "xem gợi ý hành động tương ứng."
+            "Mỗi campaign TỰ quét toàn bộ giờ nó có dữ liệu trong ngày để tìm "
+            "cặp giờ cho LTV đổi NHIỀU NHẤT (không ép cùng 1 mốc cho mọi "
+            "campaign nữa — đổi 24/09/2026) — cột \"Khoảng cách (tự chọn)\" "
+            "cho biết campaign đó cách nhau bao nhiêu tiếng. Cột \"Chiều\" cho "
+            "biết đang là cơ hội (📈 tăng) hay vấn đề (📉 giảm). Vào trang "
+            "**Xét nghiệm** để xem gợi ý hành động tương ứng."
         )
 
     st.divider()
@@ -1076,8 +1078,8 @@ def page_campaign_doctor():
 
     # Nguồn danh sách campaign đang bị cảnh báo: ĐỔI sang danh sách REALTIME
     # (22/09/2026, sau khi bỏ "xu hướng nhiều ngày" khỏi trang Cảnh báo) — xem
-    # `al_realtime_flagged` (list dict từ ia.list_flagged_hours_ago()), lưu
-    # bởi page_alerts().
+    # `al_realtime_flagged` (list dict từ ia.list_flagged_best_swing(), tự
+    # flex theo từng campaign — đổi 24/09/2026), lưu bởi page_alerts().
     if st.session_state.get("al_realtime_flagged") is None or st.session_state.get("al_raw_df") is None:
         st.info(
             "👆 Vào trang **Cảnh báo** trước — chọn app + khoảng ngày, nhập token "

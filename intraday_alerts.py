@@ -29,6 +29,12 @@ bằng — chỉ không nên so trực tiếp con số này với benchmark LTV 
 CÁCH TÍNH: mỗi dòng Adjust trả về (dimension "hour") là số PHÁT SINH TRONG
 giờ đó, KHÔNG PHẢI cộng dồn — build_cumulative_by_hour() tự cộng dồn theo
 (app, campaign) rồi tính lại LTV từ số ĐÃ CỘNG DỒN.
+
+ĐỔI 24/09/2026 — BỎ BỘ MỐC CỐ ĐỊNH (1/2/3/6 tiếng trước áp dụng chung cho MỌI
+campaign), theo phản hồi user ("cứ lấy mốc cố định để so mọi camp là quá cứng
+nhắc, có tự flex và phân tích riêng từng camp được không"). Giờ mỗi campaign
+TỰ quét toàn bộ các giờ nó có dữ liệu để tìm ra cặp giờ cho LTV đổi nhiều
+nhất — xem find_best_swing()/list_flagged_best_swing().
 """
 
 from datetime import datetime, timedelta, timezone
@@ -36,7 +42,6 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 
 VN_TZ = timezone(timedelta(hours=7))
-DEFAULT_HOURS_AGO = (1, 2, 3, 6)
 
 
 def _pct(a, b):
@@ -96,16 +101,49 @@ def _compare_to_target(cum_df: pd.DataFrame, app: str, campaign: str, target_dt:
     }
 
 
-def compare_hours_ago(cum_df: pd.DataFrame, app: str, campaign: str, hours_ago: float) -> dict | None:
-    """So giờ MỚI NHẤT với giờ GẦN mốc `hours_ago` tiếng TRƯỚC GIỜ MỚI NHẤT
-    nhất trong số các giờ đã có dữ liệu."""
+def find_best_swing(cum_df: pd.DataFrame, app: str, campaign: str, min_installs: int = 0) -> dict | None:
+    """THAY THẾ bộ mốc CỐ ĐỊNH (1/2/3/6 tiếng trước, áp dụng chung cho MỌI
+    campaign) — đổi 24/09/2026 theo yêu cầu user ("mốc cố định quá cứng
+    nhắc, có tự flex và phân tích riêng từng camp được không").
+
+    Tự quét TẤT CẢ các giờ campaign này ĐÃ CÓ DỮ LIỆU trong ngày làm baseline
+    (không giới hạn vào 1 bộ mốc giờ định sẵn), so mỗi giờ đó với giờ MỚI
+    NHẤT (cuối ngày), rồi chọn ra cặp cho LTV đổi NHIỀU NHẤT (trị tuyệt đối).
+    Nhờ vậy mỗi campaign tự "tìm" mốc so sánh khớp với chính nhịp biến động
+    của nó — campaign nào chỉ biến động rõ giữa giờ 7 và giờ 12 vẫn bắt được,
+    dù khoảng cách đó không nằm trong bộ mốc cố định nào.
+
+    Bỏ qua baseline nào có installs_cum dưới `min_installs` — so với 1 giờ
+    đầu ngày gần như trống (0-1 install) ra % đổi cực đoan là nhiễu do mẫu
+    quá nhỏ, không phải biến động thật."""
     g = cum_df[(cum_df["app"] == app) & (cum_df["campaign"] == campaign)]
     hours_sorted = sorted(g["hour"].unique())
-    if not hours_sorted:
+    if len(hours_sorted) < 2:
         return None
-    latest_dt = datetime.fromisoformat(hours_sorted[-1])
-    target_dt = latest_dt - timedelta(hours=hours_ago)
-    return _compare_to_target(cum_df, app, campaign, target_dt)
+
+    latest_hour = hours_sorted[-1]
+    latest = g[g["hour"] == latest_hour].iloc[0]
+    latest_dt = datetime.fromisoformat(latest_hour)
+
+    best = None
+    for h in hours_sorted[:-1]:
+        baseline = g[g["hour"] == h].iloc[0]
+        if min_installs and (baseline.get("installs_cum") or 0) < min_installs:
+            continue
+        pct = _pct(baseline["arpu"], latest["arpu"])
+        if pct is None:
+            continue
+        if best is None or abs(pct) > abs(best["arpu_pct_change"]):
+            gap = (latest_dt - datetime.fromisoformat(h)).total_seconds() / 3600
+            best = {
+                "baseline_ts": h,
+                "latest_ts": latest_hour,
+                "baseline": baseline.to_dict(),
+                "latest": latest.to_dict(),
+                "actual_hours_gap": round(gap, 1),
+                "arpu_pct_change": pct,
+            }
+    return best
 
 
 def compare_since_hour(cum_df: pd.DataFrame, app: str, campaign: str, baseline_hour_of_day: int) -> dict | None:
@@ -144,29 +182,23 @@ def _flag_entry(app: str, campaign: str, cmp: dict, threshold_pct: float, min_in
     }
 
 
-def list_flagged_hours_ago(
+def list_flagged_best_swing(
     cum_df: pd.DataFrame,
-    hours_ago_list: tuple = DEFAULT_HOURS_AGO,
     threshold_pct: float = 20.0,
     min_installs: int = 0,
 ) -> list:
-    """CẢNH BÁO TRONG NGÀY — kiểm tra các mốc 1/2/3/6 tiếng trước (mặc định),
-    gắn cờ nếu BẤT KỲ mốc nào cho thấy LTV đổi (tăng HOẶC giảm) vượt
-    threshold_pct%. Mỗi campaign chỉ trả về 1 dòng — chọn mốc có LTV đổi
-    NHIỀU NHẤT (trị tuyệt đối lớn nhất, bất kể chiều) trong số đã vượt ngưỡng."""
+    """CẢNH BÁO TRONG NGÀY — BẢN "TỰ FLEX" (thay hẳn bộ mốc cố định 1/2/3/6
+    tiếng cũ, xem docstring find_best_swing()). Mỗi campaign tự quét toàn bộ
+    giờ nó có dữ liệu để tìm cặp giờ cho LTV đổi (tăng HOẶC giảm) nhiều nhất,
+    gắn cờ nếu vượt threshold_pct%."""
     if cum_df is None or cum_df.empty:
         return []
     flagged = []
     for (app, campaign), _ in cum_df.groupby(["app", "campaign"]):
-        candidates = []
-        for h in hours_ago_list:
-            entry = _flag_entry(app, campaign, compare_hours_ago(cum_df, app, campaign, h), threshold_pct, min_installs, h)
-            if entry is not None:
-                candidates.append(entry)
-        if not candidates:
-            continue
-        worst = max(candidates, key=lambda e: abs(e.get("arpu_pct_change") or 0))
-        flagged.append(worst)
+        cmp = find_best_swing(cum_df, app, campaign, min_installs)
+        entry = _flag_entry(app, campaign, cmp, threshold_pct, min_installs, "auto")
+        if entry:
+            flagged.append(entry)
     return sorted(flagged, key=lambda f: f.get("arpu_pct_change") or 0)
 
 

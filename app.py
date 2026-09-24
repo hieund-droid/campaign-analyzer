@@ -1522,20 +1522,32 @@ def page_market_overview():
                     column_config={
                         "LTV giờ vàng (TB)": st.column_config.NumberColumn(format="$%.4f"),
                         "LTV giờ đáy (TB)": st.column_config.NumberColumn(format="$%.4f"),
-                        "Chênh lệch (%)": st.column_config.NumberColumn(format="%.0f%%"),
+                        "Chênh lệch (%)": st.column_config.NumberColumn(format="percent"),
                     },
                 )
-                st.caption(
-                    "Chênh lệch cao nhất lên đầu — thị trường có khác biệt rõ "
-                    "rệt giữa giờ tốt/xấu nhất, đáng cân nhắc điều chỉnh ngân "
-                    "sách theo khung giờ. Gợi ý: **tăng** ngân sách/bid vào "
-                    "\"Giờ vàng\", **giảm**/dồn budget sang giờ khác vào \"Giờ đáy\"."
+                st.caption("Chênh lệch cao nhất lên đầu — thị trường có khác biệt rõ rệt giữa giờ tốt/xấu nhất, đáng cân nhắc điều chỉnh ngân sách theo khung giờ trước.")
+
+                # THÊM 24/09/2026 (theo yêu cầu user — "bảng ... hãy có cả
+                # suggest ở dưới ... theo đầu thị trường"): gợi ý CỤ THỂ cho
+                # TỪNG thị trường (không chỉ 1 câu chung chung như trước).
+                st.markdown("**Gợi ý hành động theo từng thị trường:**")
+                for s in hmp_module.build_market_suggestions(summary):
+                    st.markdown(f"- **{s['Quốc gia']}**: {s['Gợi ý']}")
+
+                # SỬA 24/09/2026 (theo yêu cầu user — bảng dump hết mọi thị
+                # trường/giờ "không thuận lợi cho việc xem data"): thay bằng
+                # chọn ĐÚNG 1 thị trường + vẽ biểu đồ trend LTV theo giờ cho
+                # thị trường đó, dễ nhìn tổng quan hơn nhiều so với bảng dài.
+                st.divider()
+                st.subheader("Xem trend LTV theo giờ — chọn 1 thị trường")
+                market_options = sorted(patterns["Quốc gia"].unique())
+                selected_market = st.selectbox("Thị trường", market_options, key="hmp_selected_market")
+                market_detail = patterns[patterns["Quốc gia"] == selected_market].sort_values("Giờ")
+                st.line_chart(market_detail.set_index("Giờ")[["LTV"]])
+                st.dataframe(
+                    market_detail[["Giờ", "Installs", "LTV"]], width="stretch", hide_index=True,
+                    column_config={"LTV": st.column_config.NumberColumn(format="$%.4f")},
                 )
-                with st.expander("Xem chi tiết LTV từng giờ của từng thị trường"):
-                    st.dataframe(
-                        patterns, width="stretch", hide_index=True,
-                        column_config={"LTV": st.column_config.NumberColumn(format="$%.4f")},
-                    )
 
 
 # ══════════════════════════════════════════════════════════════════════

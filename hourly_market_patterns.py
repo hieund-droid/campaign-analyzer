@@ -87,7 +87,14 @@ def summarize_peak_and_low_hours(patterns_df: pd.DataFrame, top_n_hours: int = 3
         low = g_sorted.tail(top_n_hours)
         peak_avg = peak["LTV"].mean()
         low_avg = low["LTV"].mean()
-        diff_pct = ((peak_avg - low_avg) / low_avg * 100) if low_avg else None
+        # SỬA 24/09/2026 — lưu dạng PHÂN SỐ (0.6635), KHÔNG nhân sẵn 100
+        # (66.35): dùng `st.column_config.NumberColumn(format="percent")` ở
+        # app.py cần input là phân số (tự nhân 100 khi hiện) — trước đó lưu
+        # số ĐÃ nhân 100 + format in kèm "%%" viết tay khiến cột hiện TRỐNG
+        # trên Streamlit Cloud (user chụp ảnh chỉ ra) dù dữ liệu/sắp xếp vẫn
+        # đúng ngầm bên trong — đổi sang cách "percent" chuẩn, đã dùng ổn ở
+        # nơi khác trong app (VD cột ROAS D0/Retention D1).
+        diff_pct = ((peak_avg - low_avg) / low_avg) if low_avg else None
         rows.append({
             "Quốc gia": country,
             "Giờ vàng": ", ".join(f"{h:02d}h" for h in sorted(peak["Giờ"])),
@@ -99,3 +106,27 @@ def summarize_peak_and_low_hours(patterns_df: pd.DataFrame, top_n_hours: int = 3
     if not rows:
         return pd.DataFrame()
     return pd.DataFrame(rows).sort_values("Chênh lệch (%)", ascending=False).reset_index(drop=True)
+
+
+def build_market_suggestions(summary_df: pd.DataFrame) -> list:
+    """THÊM 24/09/2026 (theo yêu cầu user — "bảng ... hãy có cả suggest ở
+    dưới ... theo đầu thị trường"): sinh 1 câu gợi ý hành động CỤ THỂ cho
+    TỪNG thị trường trong `summary_df` (kết quả summarize_peak_and_low_hours())
+    — tăng ngân sách vào ĐÚNG khung giờ vàng của thị trường đó, giảm vào ĐÚNG
+    khung giờ đáy — thay vì chỉ 1 caption chung chung áp dụng mọi thị trường
+    như nhau. Giữ nguyên thứ tự `summary_df` (đã sắp chênh lệch cao nhất lên
+    đầu — đáng làm nhất trước)."""
+    if summary_df is None or summary_df.empty:
+        return []
+    return [
+        {
+            "Quốc gia": r["Quốc gia"],
+            "Gợi ý": (
+                f"**Tăng** ngân sách/bid vào khung **{r['Giờ vàng']}** (LTV TB "
+                f"${r['LTV giờ vàng (TB)']:.4f}) — **giảm**/dồn ngân sách khỏi "
+                f"khung **{r['Giờ đáy']}** (LTV TB ${r['LTV giờ đáy (TB)']:.4f}) "
+                f"— chênh lệch {r['Chênh lệch (%)'] * 100:.0f}%."
+            ),
+        }
+        for _, r in summary_df.iterrows()
+    ]

@@ -907,6 +907,15 @@ def page_alerts():
 
     _channel_map = st.session_state.get("al_campaign_channel_map", {})
 
+    # Tô màu chữ cột "LTV % đổi" — xanh nếu tăng, đỏ nếu giảm (dễ nhìn hơn chỉ
+    # dấu +/-). Định nghĩa ở NGOÀI cả 2 khối if/else bên dưới (bảng 1/2/3/6
+    # tiếng VÀ bảng tự chọn giờ đều dùng) — tránh lỗi "chưa định nghĩa" nếu 1
+    # trong 2 bảng không có dòng nào để hiện.
+    def _color_pct(val):
+        if val is None or pd.isna(val):
+            return ""
+        return "color: #1a8a3c" if val > 0 else ("color: #d1332e" if val < 0 else "")
+
     if not all_flagged_today:
         if _diag_total_campaigns == 0:
             st.warning(
@@ -963,8 +972,10 @@ def page_alerts():
             }
             for f in all_flagged_today
         ]
+        _realtime_df = pd.DataFrame(realtime_rows)
         st.dataframe(
-            pd.DataFrame(realtime_rows), width="stretch", hide_index=True,
+            _realtime_df.style.map(_color_pct, subset=["LTV % đổi"]),
+            width="stretch", hide_index=True,
             column_config={
                 "LTV lúc đó": st.column_config.NumberColumn(format="$%.4f"),
                 f"LTV {_end_word}": st.column_config.NumberColumn(format="$%.4f"),
@@ -1015,8 +1026,10 @@ def page_alerts():
             }
             for f in all_flagged_since_hour
         ]
+        _since_hour_df = pd.DataFrame(since_hour_rows)
         st.dataframe(
-            pd.DataFrame(since_hour_rows), width="stretch", hide_index=True,
+            _since_hour_df.style.map(_color_pct, subset=["LTV % đổi"]),
+            width="stretch", hide_index=True,
             column_config={
                 "LTV lúc đó": st.column_config.NumberColumn(format="$%.4f"),
                 f"LTV {_end_word}": st.column_config.NumberColumn(format="$%.4f"),

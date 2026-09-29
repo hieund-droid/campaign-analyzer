@@ -1172,6 +1172,12 @@ def page_alerts():
         # xa (lẽ ra phải là "Installs cuối ngày"/"LTV cuối ngày" như cột giờ đã
         # tự đổi đúng) — sửa dùng chung 1 biến để nhất quán.
         _end_word = _now_or_end_label.lower()
+        # THÊM 29/09/2026 (theo yêu cầu user — "không thể trình bày luôn tại
+        # bảng này à" thay vì tách riêng mục/dropdown bên dưới): cột "Diễn
+        # biến trong ngày" tóm tắt NGAY trong bảng toàn bộ các đoạn tăng/giảm
+        # LTV trong ngày (không neo giờ nào — xem docstring
+        # ia.detect_trend_segments()/format_trend_segments()), để không cần
+        # chọn riêng 1 campaign ở mục khác mới thấy được.
         realtime_rows = [
             {
                 "Campaign": f["campaign"],
@@ -1185,6 +1191,9 @@ def page_alerts():
                 "LTV lúc đó": f["baseline"].get("arpu"),
                 f"LTV {_end_word}": f["latest"].get("arpu"),
                 "LTV % đổi": f["arpu_pct_change"],
+                "Diễn biến trong ngày": ia.format_trend_segments(
+                    ia.detect_trend_segments(hourly_df, f["app"], f["campaign"])
+                ),
             }
             for f in all_flagged_today
         ]
@@ -1204,8 +1213,11 @@ def page_alerts():
             "mốc cho mọi campaign, nhưng cũng không so quá xa cả ngày — đổi "
             "24/09/2026) — cột \"Khoảng cách (tự chọn)\" cho biết campaign đó "
             "cách nhau bao nhiêu tiếng. Cột \"Chiều\" cho biết đang là cơ hội "
-            "(📈 tăng) hay vấn đề (📉 giảm). Vào trang **Xét nghiệm** để xem "
-            "gợi ý hành động tương ứng."
+            "(📈 tăng) hay vấn đề (📉 giảm). Cột \"Diễn biến trong ngày\" liệt "
+            "kê TOÀN BỘ các đoạn tăng/giảm LTV trong ngày (không neo vào giờ "
+            "nào — dùng LTV theo giờ KHÔNG cộng dồn, khác cách tính ở các cột "
+            "LTV khác trong bảng này). Vào trang **Xét nghiệm** để xem gợi ý "
+            "hành động tương ứng."
         )
 
     st.divider()
@@ -1241,6 +1253,9 @@ def page_alerts():
                 "LTV lúc đó": f["baseline"].get("arpu"),
                 f"LTV {_end_word}": f["latest"].get("arpu"),
                 "LTV % đổi": f["arpu_pct_change"],
+                "Diễn biến trong ngày": ia.format_trend_segments(
+                    ia.detect_trend_segments(hourly_df, f["app"], f["campaign"])
+                ),
             }
             for f in all_flagged_since_hour
         ]
@@ -1254,50 +1269,6 @@ def page_alerts():
                 "LTV % đổi": st.column_config.NumberColumn(format="%.1f%%"),
             },
         )
-
-    # THÊM 29/09/2026 (theo yêu cầu user — chỉ ra 2 bảng trên LUÔN neo 1 đầu
-    # vào giờ CUỐI NGÀY nên "bị động, cho ít ý nghĩa": nếu LTV giảm 1 đoạn
-    # rồi hồi lại rồi giảm tiếp trong ngày, chỉ bắt được đoạn CUỐI, bỏ sót
-    # đoạn giảm-rồi-hồi ở giữa). Mục MỚI này KHÔNG neo giờ nào cả — quét toàn
-    # bộ 24 giờ, tách ra từng ĐOẠN tăng/giảm liên tục cho 1 campaign tự chọn
-    # (xem docstring ia.detect_trend_segments()).
-    st.divider()
-    st.subheader("Diễn biến chi tiết trong ngày theo từng campaign")
-    st.caption(
-        "2 bảng trên LUÔN so với giờ CUỐI NGÀY — có thể bỏ sót campaign giảm "
-        "rồi hồi lại (hoặc ngược lại) NHIỀU LẦN trong ngày. Chọn 1 campaign "
-        "để xem TOÀN BỘ khung giờ nào LTV giảm, khung giờ nào bắt đầu hồi "
-        "hoặc giảm trở lại — không neo vào giờ nào cả."
-    )
-    _trend_campaign_options = sorted(cum_df_scope["campaign"].dropna().unique()) if not cum_df_scope.empty else []
-    if not _trend_campaign_options:
-        st.info("Chưa có campaign nào đủ dữ liệu để xem.")
-    else:
-        _trend_selected_campaign = st.selectbox(
-            "Xem diễn biến của campaign nào?", _trend_campaign_options, key="al_trend_campaign",
-        )
-        _trend_app = cum_df_scope.loc[cum_df_scope["campaign"] == _trend_selected_campaign, "app"].iloc[0]
-        _segments = ia.detect_trend_segments(hourly_df, _trend_app, _trend_selected_campaign)
-        if not _segments:
-            st.caption(
-                "Không đủ dữ liệu giờ (hoặc quá ít install/giờ) để tách khung "
-                "giờ tăng/giảm cho campaign này."
-            )
-        else:
-            for _seg in _segments:
-                _seg_icon = "📈" if _seg["direction"] == "tang" else "📉"
-                _seg_word = "TĂNG" if _seg["direction"] == "tang" else "GIẢM"
-                st.markdown(
-                    f"- {_seg_icon} **{_seg['start_ts'][11:16]} → {_seg['end_ts'][11:16]}**: "
-                    f"LTV {_seg_word} **{_seg['pct_change']:+.0f}%** "
-                    f"(\\${_seg['start_ltv']:.4f} → \\${_seg['end_ltv']:.4f})"
-                )
-            st.caption(
-                "Dùng LTV THEO GIỜ (phát sinh trong giờ đó, không cộng dồn) — "
-                "khác cách tính ở 2 bảng trên (cộng dồn từ đầu ngày). Bỏ qua "
-                "bước đổi <10% giữa 2 giờ liền nhau (coi là nhiễu/đi ngang, "
-                "không tách thành đoạn riêng)."
-            )
 
 
 # ══════════════════════════════════════════════════════════════════════

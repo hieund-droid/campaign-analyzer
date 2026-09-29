@@ -333,3 +333,23 @@ def detect_trend_segments(
         segments.append(_build_segment(df, seg_start_idx, len(df) - 1, current_dir))
 
     return segments
+
+
+def format_trend_segments(segments: list) -> str:
+    """Rút gọn kết quả detect_trend_segments() thành 1 chuỗi ngắn để nhét
+    THẲNG vào 1 cột của bảng cảnh báo (THÊM 29/09/2026 — user chỉ ra không
+    cần tách riêng 1 mục/dropdown bên dưới, "không thể trình bày luôn tại
+    bảng này à" — gộp thẳng vào bảng đang có luôn, không thêm UI mới).
+
+    VD: "05h→12h ↓33% · 12h→22h ↑129% · 22h→23h ↓84%"."""
+    if not segments:
+        return ""
+    parts = []
+    for seg in segments:
+        arrow = "↑" if seg["direction"] == "tang" else "↓"
+        start_h = seg["start_ts"][11:13]
+        end_h = seg["end_ts"][11:13]
+        pct = seg["pct_change"]
+        pct_str = f"{abs(pct):.0f}%" if pct is not None else "?"
+        parts.append(f"{start_h}h→{end_h}h {arrow}{pct_str}")
+    return " · ".join(parts)

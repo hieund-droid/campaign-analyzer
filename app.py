@@ -1183,7 +1183,7 @@ def page_alerts():
                 "Campaign": f["campaign"],
                 "Nguồn": _channel_map.get(f["campaign"], "?"),
                 "Chiều": "📈 Tăng" if f["direction"] == "tang" else "📉 Giảm",
-                "Khoảng cách (tự chọn)": f"{f['actual_hours_gap']:.1f}h",
+                "Khoảng cách (tự động)": f"{f['actual_hours_gap']:.1f}h",
                 "Lúc đó": f["baseline_ts"][11:16],
                 _now_or_end_label: f["latest_ts"][11:16],
                 "Installs lúc đó": f["baseline"].get("installs_cum"),
@@ -1201,17 +1201,32 @@ def page_alerts():
         st.dataframe(
             _realtime_df.style.map(_color_pct, subset=["LTV % đổi"]),
             width="stretch", hide_index=True,
+            # THÊM 29/09/2026 (user báo "không kéo được theo chiều ngang" —
+            # bảng quá rộng, nhiều môi trường/webview không cuộn ngang được
+            # bảng của Streamlit bằng chuột/trackpad): giới hạn RIÊNG độ rộng
+            # từng cột thay vì để TỰ ĐỘNG auto-width (vốn kéo dài hết mức theo
+            # nội dung, đặc biệt cột "Campaign" tên rất dài) — bảng gọn lại
+            # đáng kể, giảm hẳn nhu cầu phải cuộn ngang mới thấy hết cột.
             column_config={
-                "LTV lúc đó": st.column_config.NumberColumn(format="$%.4f"),
-                f"LTV {_end_word}": st.column_config.NumberColumn(format="$%.4f"),
-                "LTV % đổi": st.column_config.NumberColumn(format="%.1f%%"),
+                "Campaign": st.column_config.TextColumn(width="medium"),
+                "Nguồn": st.column_config.TextColumn(width="small"),
+                "Chiều": st.column_config.TextColumn(width="small"),
+                "Khoảng cách (tự động)": st.column_config.TextColumn(width="small"),
+                "Lúc đó": st.column_config.TextColumn(width="small"),
+                _now_or_end_label: st.column_config.TextColumn(width="small"),
+                "Installs lúc đó": st.column_config.NumberColumn(width="small"),
+                f"Installs {_end_word}": st.column_config.NumberColumn(width="small"),
+                "LTV lúc đó": st.column_config.NumberColumn(format="$%.4f", width="small"),
+                f"LTV {_end_word}": st.column_config.NumberColumn(format="$%.4f", width="small"),
+                "LTV % đổi": st.column_config.NumberColumn(format="%.1f%%", width="small"),
+                "Diễn biến trong ngày": st.column_config.TextColumn(width="medium"),
             },
         )
         st.caption(
             "Mỗi campaign TỰ quét giờ nó có dữ liệu trong TỐI ĐA 6 tiếng "
             "trước để tìm cặp giờ cho LTV đổi NHIỀU NHẤT (không ép cùng 1 "
             "mốc cho mọi campaign, nhưng cũng không so quá xa cả ngày — đổi "
-            "24/09/2026) — cột \"Khoảng cách (tự chọn)\" cho biết campaign đó "
+            "24/09/2026) — cột \"Khoảng cách (tự động)\" cho biết campaign đó "
             "cách nhau bao nhiêu tiếng. Cột \"Chiều\" cho biết đang là cơ hội "
             "(📈 tăng) hay vấn đề (📉 giảm). Cột \"Diễn biến trong ngày\" liệt "
             "kê tối đa 3 đoạn tăng/giảm LTV ĐÁNG CHÚ Ý NHẤT trong ngày (\"—\" "
@@ -1268,10 +1283,20 @@ def page_alerts():
         st.dataframe(
             _since_hour_df.style.map(_color_pct, subset=["LTV % đổi"]),
             width="stretch", hide_index=True,
+            # Giới hạn độ rộng từng cột — xem comment ở bảng "so mấy tiếng
+            # trước" phía trên (cùng lý do: user báo không cuộn ngang được).
             column_config={
-                "LTV lúc đó": st.column_config.NumberColumn(format="$%.4f"),
-                f"LTV {_end_word}": st.column_config.NumberColumn(format="$%.4f"),
-                "LTV % đổi": st.column_config.NumberColumn(format="%.1f%%"),
+                "Campaign": st.column_config.TextColumn(width="medium"),
+                "Nguồn": st.column_config.TextColumn(width="small"),
+                "Chiều": st.column_config.TextColumn(width="small"),
+                f"Lúc ~{int(al_since_hour):02d}h": st.column_config.TextColumn(width="small"),
+                _now_or_end_label: st.column_config.TextColumn(width="small"),
+                "Installs lúc đó": st.column_config.NumberColumn(width="small"),
+                f"Installs {_end_word}": st.column_config.NumberColumn(width="small"),
+                "LTV lúc đó": st.column_config.NumberColumn(format="$%.4f", width="small"),
+                f"LTV {_end_word}": st.column_config.NumberColumn(format="$%.4f", width="small"),
+                "LTV % đổi": st.column_config.NumberColumn(format="%.1f%%", width="small"),
+                "Diễn biến trong ngày": st.column_config.TextColumn(width="medium"),
             },
         )
 

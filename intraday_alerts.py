@@ -261,12 +261,16 @@ def _build_segment(hourly_ltv_df: pd.DataFrame, start_idx: int, end_idx: int, di
     }
 
 
+DEFAULT_TREND_MIN_TOTAL_INSTALLS = 50
+
+
 def detect_trend_segments(
     hourly_df: pd.DataFrame,
     app: str,
     campaign: str,
     min_installs_per_hour: int = DEFAULT_TREND_MIN_INSTALLS_PER_HOUR,
     min_step_pct: float = DEFAULT_TREND_MIN_STEP_PCT,
+    min_total_installs: int = DEFAULT_TREND_MIN_TOTAL_INSTALLS,
 ) -> list:
     """THÊM 29/09/2026 (theo yêu cầu user — chỉ ra `find_best_swing()` LUÔN
     neo 1 đầu vào giờ MỚI NHẤT trong ngày (VD 23h), nên "bị động, cho ít ý
@@ -281,14 +285,36 @@ def detect_trend_segments(
     đầu ngày, càng về cuối ngày càng bị "trung bình hoá" bởi các giờ trước
     đó, làm mờ đúng lúc xu hướng đổi chiều). Vì vậy hàm này nhận `hourly_df`
     THÔ (chưa cộng dồn, cùng input đưa vào build_cumulative_by_hour()), tự
-    gộp lại theo giờ ở đây.
+    gộp lại theo giờ ở đây. HỆ QUẢ: cột "Chiều" (dựa trên số CỘNG DỒN) và
+    kết quả hàm này (dựa trên số THEO GIỜ) có thể "nhìn có vẻ trái chiều nhau"
+    ở cùng 1 campaign (VD "Chiều" báo Giảm nhưng có 1 đoạn ở đây báo Tăng) —
+    KHÔNG PHẢI lỗi, mà là 2 CÁCH ĐO khác nhau đang trả lời 2 câu hỏi khác
+    nhau ("từ lúc X tới cuối ngày, xu hướng chung là gì" vs "trong ngày, lúc
+    nào tăng lúc nào giảm cụ thể") — ĐÃ SỬA 29/09/2026 (user chỉ ra hiện
+    tượng này + phản hồi kết quả "trông thiếu tin cậy"): siết chặt 2 điều
+    kiện dưới đây để giảm hẳn khả năng đây là NHIỄU (installs/giờ quá ít)
+    thay vì tín hiệu thật.
 
     `min_installs_per_hour`: bỏ qua giờ có quá ít install (mẫu quá nhỏ, LTV
     dễ nhảy vọt vô nghĩa — cùng tinh thần các nơi khác trong project).
-    `min_step_pct`: bước giữa 2 giờ LIỀN NHAU phải đổi ít nhất % này mới tính
-    là "đổi hướng" — bước nhỏ hơn coi là nhiễu/đi ngang, KHÔNG cắt đoạn (vẫn
-    tính là tiếp tục xu hướng đang có, tránh tách vụn thành quá nhiều đoạn
-    ngắn vô nghĩa từ nhiễu)."""
+
+    `min_total_installs` (MỚI 29/09/2026): nếu TỔNG install của các giờ ĐỦ
+    điều kiện (sau khi lọc `min_installs_per_hour`) dưới ngưỡng này, TRẢ VỀ
+    RỖNG thay vì cố tách đoạn — campaign quá ít dữ liệu (VD chỉ 41 install
+    CẢ NGÀY) thì bất kỳ đoạn nào tách ra cũng chỉ là nhiễu ngẫu nhiên từ vài
+    install lẻ tẻ, không đáng tin để gọi là "xu hướng".
+
+    KHÔNG BẮC CẦU qua giờ bị lọc mất (MỚI 29/09/2026 — user chỉ ra đoạn dài
+    kiểu "12h→18h" trông như tăng liên tục suốt 6 tiếng nhưng thật ra nhiều
+    giờ ở giữa (13h-17h) không đủ install nên bị lọc mất, KHÔNG BIẾT thật sự
+    chuyện gì xảy ra trong khoảng đó): nếu 2 giờ ĐỦ điều kiện liền nhau trong
+    `df` KHÔNG PHẢI 2 giờ liên tiếp thật (có giờ bị lọc ở giữa), NGẮT thành 2
+    đoạn riêng tại đó thay vì gộp thành 1 đoạn dài bắc cầu qua khoảng trống.
+
+    `min_step_pct`: bước giữa 2 giờ LIỀN NHAU THẬT phải đổi ít nhất % này mới
+    tính là "đổi hướng" — bước nhỏ hơn coi là nhiễu/đi ngang, KHÔNG cắt đoạn
+    (vẫn tính là tiếp tục xu hướng đang có, tránh tách vụn thành quá nhiều
+    đoạn ngắn vô nghĩa từ nhiễu)."""
     if hourly_df is None or hourly_df.empty:
         return []
     df = hourly_df[(hourly_df["app"] == app) & (hourly_df["campaign"] == campaign)].copy()
@@ -298,17 +324,29 @@ def detect_trend_segments(
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
     df = df.groupby("hour")[["installs", "ad_revenue"]].sum().reset_index().sort_values("hour")
     df = df[df["installs"] >= min_installs_per_hour]
-    if len(df) < 2:
+    if len(df) < 2 or df["installs"].sum() < min_total_installs:
         return []
     df["ltv"] = df["ad_revenue"] / df["installs"].replace(0, pd.NA)
     df = df.dropna(subset=["ltv"]).reset_index(drop=True)
     if len(df) < 2:
         return []
+    df["hour_dt"] = df["hour"].apply(datetime.fromisoformat)
 
     segments = []
     current_dir = None
     seg_start_idx = 0
     for i in range(1, len(df)):
+        gap_hours = (df.loc[i, "hour_dt"] - df.loc[i - 1, "hour_dt"]).total_seconds() / 3600
+        if gap_hours > 1.0:
+            # Có giờ bị lọc mất ở giữa (không liên tiếp thật) — KHÔNG bắc
+            # cầu qua khoảng trống này, đóng đoạn đang có (nếu có) rồi bắt
+            # đầu lại từ đây, coi như chưa biết gì về đoạn trước đó.
+            if current_dir is not None:
+                segments.append(_build_segment(df, seg_start_idx, i - 1, current_dir))
+            current_dir = None
+            seg_start_idx = i
+            continue
+
         pct = _pct(df.loc[i - 1, "ltv"], df.loc[i, "ltv"])
         if pct is None:
             continue
@@ -335,21 +373,42 @@ def detect_trend_segments(
     return segments
 
 
-def format_trend_segments(segments: list) -> str:
+DEFAULT_TREND_MAX_SEGMENTS_SHOWN = 3
+
+
+def format_trend_segments(segments: list, max_segments_shown: int = DEFAULT_TREND_MAX_SEGMENTS_SHOWN) -> str:
     """Rút gọn kết quả detect_trend_segments() thành 1 chuỗi ngắn để nhét
     THẲNG vào 1 cột của bảng cảnh báo (THÊM 29/09/2026 — user chỉ ra không
     cần tách riêng 1 mục/dropdown bên dưới, "không thể trình bày luôn tại
     bảng này à" — gộp thẳng vào bảng đang có luôn, không thêm UI mới).
 
+    SỬA 29/09/2026 (user chê kết quả "nhìn hơi thiếu chuyên nghiệp" khi liệt
+    kê quá nhiều đoạn vụn trong 1 ô): nếu có nhiều hơn `max_segments_shown`
+    đoạn, CHỈ hiện `max_segments_shown` đoạn có % thay đổi LỚN NHẤT (đáng chú
+    ý nhất), vẫn giữ ĐÚNG thứ tự thời gian giữa các đoạn được chọn, kèm
+    "+N đoạn khác" ở cuối nếu có đoạn bị lược bớt — gọn hơn nhiều so với liệt
+    kê hết mọi đoạn nhỏ lẻ.
+
     VD: "05h→12h ↓33% · 12h→22h ↑129% · 22h→23h ↓84%"."""
     if not segments:
         return ""
+    shown = segments
+    hidden_count = 0
+    if len(segments) > max_segments_shown:
+        by_magnitude = sorted(segments, key=lambda s: abs(s["pct_change"] or 0), reverse=True)
+        keep_ts = {(s["start_ts"], s["end_ts"]) for s in by_magnitude[:max_segments_shown]}
+        shown = [s for s in segments if (s["start_ts"], s["end_ts"]) in keep_ts]
+        hidden_count = len(segments) - len(shown)
+
     parts = []
-    for seg in segments:
+    for seg in shown:
         arrow = "↑" if seg["direction"] == "tang" else "↓"
         start_h = seg["start_ts"][11:13]
         end_h = seg["end_ts"][11:13]
         pct = seg["pct_change"]
         pct_str = f"{abs(pct):.0f}%" if pct is not None else "?"
         parts.append(f"{start_h}h→{end_h}h {arrow}{pct_str}")
-    return " · ".join(parts)
+    result = " · ".join(parts)
+    if hidden_count:
+        result += f" · +{hidden_count} đoạn khác"
+    return result

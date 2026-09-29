@@ -1193,7 +1193,7 @@ def page_alerts():
                 "LTV % đổi": f["arpu_pct_change"],
                 "Diễn biến trong ngày": ia.format_trend_segments(
                     ia.detect_trend_segments(hourly_df, f["app"], f["campaign"])
-                ),
+                ) or "—",
             }
             for f in all_flagged_today
         ]
@@ -1214,9 +1214,14 @@ def page_alerts():
             "24/09/2026) — cột \"Khoảng cách (tự chọn)\" cho biết campaign đó "
             "cách nhau bao nhiêu tiếng. Cột \"Chiều\" cho biết đang là cơ hội "
             "(📈 tăng) hay vấn đề (📉 giảm). Cột \"Diễn biến trong ngày\" liệt "
-            "kê TOÀN BỘ các đoạn tăng/giảm LTV trong ngày (không neo vào giờ "
-            "nào — dùng LTV theo giờ KHÔNG cộng dồn, khác cách tính ở các cột "
-            "LTV khác trong bảng này). Vào trang **Xét nghiệm** để xem gợi ý "
+            "kê tối đa 3 đoạn tăng/giảm LTV ĐÁNG CHÚ Ý NHẤT trong ngày (\"—\" "
+            "= campaign quá ít install/giờ để tách đoạn đáng tin) — dùng LTV "
+            "theo giờ KHÔNG cộng dồn (khác cách tính ở các cột LTV khác trong "
+            "bảng này), nên có thể \"nhìn trái chiều\" với cột \"Chiều\" ở "
+            "cùng 1 dòng — KHÔNG PHẢI lỗi, chỉ là 2 cách đo khác nhau: \"Chiều\" "
+            "so sánh CỘNG DỒN từ 1 mốc tới cuối ngày, còn \"Diễn biến trong "
+            "ngày\" tách RIÊNG từng khung giờ cụ thể tăng hay giảm. Vào trang "
+            "**Xét nghiệm** để xem gợi ý "
             "hành động tương ứng."
         )
 
@@ -1255,7 +1260,7 @@ def page_alerts():
                 "LTV % đổi": f["arpu_pct_change"],
                 "Diễn biến trong ngày": ia.format_trend_segments(
                     ia.detect_trend_segments(hourly_df, f["app"], f["campaign"])
-                ),
+                ) or "—",
             }
             for f in all_flagged_since_hour
         ]

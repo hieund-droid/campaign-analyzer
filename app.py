@@ -369,6 +369,30 @@ def load_hourly_data(app_tokens_raw: str, api_token: str, date_str: str):
     return pd.DataFrame(rows), warning_msg
 
 
+@st.cache_data(ttl=5 * 60, show_spinner="Đang lấy dữ liệu theo giờ × thị trường...")
+def load_hourly_by_country_for_date(app_tokens_raw: str, api_token: str, date_str: str):
+    """THÊM 29/09/2026 — dùng cho biểu đồ "LTV theo giờ" ở trang Cảnh báo khi
+    user chọn xem RIÊNG 1 thị trường (thay vì gộp cả app) — kéo dimension
+    "app,hour,country" cho ĐÚNG 1 ngày (xem adjust_client.fetch_hourly_for_
+    date_by_country()). TÁCH RIÊNG khỏi load_hourly_data() (dimension
+    "app,hour,campaign", dùng cho logic gắn cờ cảnh báo — KHÔNG đổi) vì
+    Adjust cần dimension riêng cho quốc gia, không ghép chung được với
+    campaign trong 1 lần gọi mà vẫn đúng số (đã kiểm chứng nguyên tắc này ở
+    các nơi khác trong project)."""
+    if not api_token or not app_tokens_raw:
+        return None, "Thiếu API Token / App Token."
+    app_tokens = ac.parse_app_tokens(app_tokens_raw)
+    try:
+        data = ac.fetch_hourly_for_date_by_country(api_token, app_tokens, date_str, exit_on_error=False)
+    except Exception as e:  # noqa: BLE001
+        return None, f"Lỗi gọi Adjust API: {e}"
+    warning_msg = ac.extract_warnings(data)
+    rows = data.get("rows") or []
+    if not rows:
+        return pd.DataFrame(), warning_msg
+    return pd.DataFrame(rows), warning_msg
+
+
 def weighted_kpis(df: pd.DataFrame) -> dict:
     """Tính KPI tổng hợp ĐÚNG CÁCH — không lấy trung bình/tổng trực tiếp các cột
     tỉ lệ (ecpi_all, roas_ad_dN, retention_rate_dN) vì sẽ sai (đã kiểm chứng
@@ -1012,17 +1036,56 @@ def page_alerts():
     # tin khi xem NGÀY ĐÃ QUA khá lâu (mọi giờ trong ngày đó đã "chín" gần
     # bằng nhau) — xem "hôm nay" sẽ THẤY GIẢM DẦN GIẢ (giờ càng gần hiện tại,
     # doanh thu càng chưa kịp phát sinh, không phải chất lượng user tệ hơn).
-    _hourly_totals = cum_df_scope.groupby("hour")[["installs", "ad_revenue"]].sum().sort_index()
+    #
+    # THÊM 29/09/2026 (theo yêu cầu user — "riêng phần LTV trong cảnh báo này
+    # có thể build 1 cái để có thể lựa chọn từng thị trường cụ thể không"):
+    # ô chọn thị trường cho 2 biểu đồ này. Dùng LẠI `load_known_countries()`
+    # (đã có sẵn cho trang Benchmark, cache 15 phút — KHÔNG tốn thêm lệnh gọi
+    # nếu đã xem Benchmark app này trong 15 phút qua) để có danh sách thị
+    # trường mà KHÔNG cần fetch riêng theo giờ trước — CHỈ khi user chọn 1
+    # thị trường cụ thể (khác mặc định "Cả thị trường") mới gọi
+    # `load_hourly_by_country_for_date()` (dimension "app,hour,country", ĐÚNG
+    # 1 ngày đang xem) — giữ lazy, không tốn thêm API nếu không ai dùng.
+    _market_countries, _market_countries_err = load_known_countries(al_app_tokens_raw, al_api_token, al_product_id)
+    if _market_countries_err:
+        st.caption(f"⚠️ Không lấy được danh sách thị trường ({_market_countries_err}) — chỉ xem được cả app.")
+    _market_options = ["(Cả thị trường)"] + (_market_countries or [])
+    al_hourly_market = st.selectbox(
+        "Xem 2 biểu đồ dưới đây theo thị trường nào?", _market_options, key="al_hourly_market_filter",
+        help="Mặc định gộp CẢ THỊ TRƯỜNG (mọi quốc gia cộng lại, như trước "
+        "giờ) — chọn 1 quốc gia cụ thể để xem riêng Installs/LTV theo giờ của "
+        "ĐÚNG thị trường đó trong ngày đang xem.",
+    )
+
+    if al_hourly_market == "(Cả thị trường)":
+        _hourly_totals = cum_df_scope.groupby("hour")[["installs", "ad_revenue"]].sum().sort_index()
+    else:
+        _hc_df, _hc_err = load_hourly_by_country_for_date(al_app_tokens_raw, al_api_token, _view_date_iso)
+        if _hc_err:
+            st.error(f"❌ Không lấy được dữ liệu theo giờ × thị trường: {_hc_err}")
+            _hourly_totals = pd.DataFrame(columns=["installs", "ad_revenue"])
+        elif _hc_df is None or _hc_df.empty:
+            _hourly_totals = pd.DataFrame(columns=["installs", "ad_revenue"])
+        else:
+            for _col in ("installs", "ad_revenue"):
+                _hc_df[_col] = pd.to_numeric(_hc_df[_col], errors="coerce").fillna(0)
+            _hc_scope = _hc_df[
+                _hc_df["app"].str.startswith(al_product_id) & (_hc_df["country"] == al_hourly_market)
+            ]
+            _hourly_totals = _hc_scope.groupby("hour")[["installs", "ad_revenue"]].sum().sort_index()
     _hourly_totals["ltv"] = _hourly_totals["ad_revenue"] / _hourly_totals["installs"].replace(0, pd.NA)
     _hourly_totals.index = [h[11:16] for h in _hourly_totals.index]
 
+    _market_label = "cả app, mọi thị trường cộng lại" if al_hourly_market == "(Cả thị trường)" else f"riêng thị trường {al_hourly_market}"
     chart_col1, chart_col2 = st.columns(2)
     with chart_col1:
-        st.caption("Installs theo giờ (cả app, mọi campaign cộng lại):")
+        st.caption(f"Installs theo giờ ({_market_label}):")
         if not _hourly_totals.empty:
             st.bar_chart(_hourly_totals[["installs"]])
+        else:
+            st.caption("Không có dữ liệu cho lựa chọn này.")
     with chart_col2:
-        st.caption("LTV theo giờ (= doanh thu ads ÷ installs phát sinh trong giờ đó):")
+        st.caption(f"LTV theo giờ ({_market_label}):")
         if _is_today_view:
             st.caption(
                 "⚠️ Đang xem HÔM NAY — biểu đồ này sẽ tự nhiên giảm dần về cuối "
@@ -1031,6 +1094,8 @@ def page_alerts():
             )
         if not _hourly_totals.empty:
             st.line_chart(_hourly_totals[["ltv"]])
+        else:
+            st.caption("Không có dữ liệu cho lựa chọn này.")
 
     all_flagged_today = ia.list_flagged_best_swing(
         cum_df_scope, threshold_pct=float(al_realtime_pct), min_installs=int(al_min_installs)

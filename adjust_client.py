@@ -253,6 +253,33 @@ def fetch_hourly_for_date(api_token: str, app_tokens: list, date_str: str, ad_sp
     )
 
 
+DETAIL_DIMENSIONS_HOURLY_COUNTRY = "app,hour,country"
+
+
+def fetch_hourly_for_date_by_country(
+    api_token: str, app_tokens: list, date_str: str, ad_spend_mode: str | None = None, **kw
+) -> dict:
+    """THÊM 29/09/2026 (theo yêu cầu user — muốn chọn TỪNG THỊ TRƯỜNG cụ thể
+    cho biểu đồ "LTV theo giờ" ở trang Cảnh báo, vốn trước giờ chỉ gộp CẢ APP
+    vì fetch chính của trang này KHÔNG có dimension "country", chỉ có
+    "campaign" — xem DETAIL_DIMENSIONS_HOURLY): giống hệt
+    fetch_hourly_for_date() (ghi đè date_period để lấy ĐÚNG 1 ngày cụ thể,
+    KHÔNG ép "hôm nay") nhưng đổi dimension sang "app,hour,country" (bỏ
+    "campaign") — dùng RIÊNG để vẽ biểu đồ theo thị trường, KHÔNG dùng cho
+    logic gắn cờ cảnh báo (vẫn theo campaign, không đổi).
+
+    Khác `fetch_hourly_by_country()` (gộp NHIỀU NGÀY để tìm quy luật ổn định
+    cho "Tổng quan thị trường") — hàm này lấy ĐÚNG 1 NGÀY, khớp với ngày user
+    đang xem ở Cảnh báo."""
+    extra_params = {"date_period": f"{date_str}:{date_str}"}
+    if ad_spend_mode:
+        extra_params["ad_spend_mode"] = ad_spend_mode
+    return call_adjust(
+        api_token, app_tokens, DETAIL_DIMENSIONS_HOURLY_COUNTRY, days_back=1,
+        include_today=True, extra_params=extra_params, **kw
+    )
+
+
 def fetch_campaign_channel_map(api_token: str, app_tokens: list, **kw) -> dict:
     """THÊM 23/09/2026 — cho biết mỗi campaign chạy qua NETWORK nào (dimension
     "channel", VD "Facebook", "Organic", "Google Ads"...). Dùng để trả lời câu

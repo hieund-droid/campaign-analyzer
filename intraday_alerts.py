@@ -242,3 +242,94 @@ def list_flagged_since_hour(
         if entry:
             flagged.append(entry)
     return sorted(flagged, key=lambda f: f.get("arpu_pct_change") or 0)
+
+
+DEFAULT_TREND_MIN_INSTALLS_PER_HOUR = 5
+DEFAULT_TREND_MIN_STEP_PCT = 10.0
+
+
+def _build_segment(hourly_ltv_df: pd.DataFrame, start_idx: int, end_idx: int, direction: str) -> dict:
+    start_row = hourly_ltv_df.loc[start_idx]
+    end_row = hourly_ltv_df.loc[end_idx]
+    return {
+        "direction": direction,
+        "start_ts": start_row["hour"],
+        "end_ts": end_row["hour"],
+        "start_ltv": start_row["ltv"],
+        "end_ltv": end_row["ltv"],
+        "pct_change": _pct(start_row["ltv"], end_row["ltv"]),
+    }
+
+
+def detect_trend_segments(
+    hourly_df: pd.DataFrame,
+    app: str,
+    campaign: str,
+    min_installs_per_hour: int = DEFAULT_TREND_MIN_INSTALLS_PER_HOUR,
+    min_step_pct: float = DEFAULT_TREND_MIN_STEP_PCT,
+) -> list:
+    """THÊM 29/09/2026 (theo yêu cầu user — chỉ ra `find_best_swing()` LUÔN
+    neo 1 đầu vào giờ MỚI NHẤT trong ngày (VD 23h), nên "bị động, cho ít ý
+    nghĩa": nếu LTV giảm 05h-12h rồi hồi lại 13h-22h rồi giảm tiếp lúc 23h,
+    thuật toán chỉ bắt được đoạn CUỐI (so với 23h), bỏ sót đoạn giảm-rồi-hồi
+    ở giữa ngày. Hàm này KHÔNG neo vào giờ nào cả — quét TOÀN BỘ 24 giờ để tự
+    tách ra các ĐOẠN xu hướng liên tục (tăng dần / giảm dần), trả về ĐÚNG lúc
+    nào bắt đầu giảm, lúc nào bắt đầu hồi (hoặc giảm tiếp) trong ngày.
+
+    QUAN TRỌNG — dùng LTV THEO GIỜ KHÔNG CỘNG DỒN (marginal, phát sinh TRONG
+    giờ đó) — KHÁC với `cum_df`/"arpu" dùng ở find_best_swing() (cộng dồn từ
+    đầu ngày, càng về cuối ngày càng bị "trung bình hoá" bởi các giờ trước
+    đó, làm mờ đúng lúc xu hướng đổi chiều). Vì vậy hàm này nhận `hourly_df`
+    THÔ (chưa cộng dồn, cùng input đưa vào build_cumulative_by_hour()), tự
+    gộp lại theo giờ ở đây.
+
+    `min_installs_per_hour`: bỏ qua giờ có quá ít install (mẫu quá nhỏ, LTV
+    dễ nhảy vọt vô nghĩa — cùng tinh thần các nơi khác trong project).
+    `min_step_pct`: bước giữa 2 giờ LIỀN NHAU phải đổi ít nhất % này mới tính
+    là "đổi hướng" — bước nhỏ hơn coi là nhiễu/đi ngang, KHÔNG cắt đoạn (vẫn
+    tính là tiếp tục xu hướng đang có, tránh tách vụn thành quá nhiều đoạn
+    ngắn vô nghĩa từ nhiễu)."""
+    if hourly_df is None or hourly_df.empty:
+        return []
+    df = hourly_df[(hourly_df["app"] == app) & (hourly_df["campaign"] == campaign)].copy()
+    if df.empty:
+        return []
+    for col in ("installs", "ad_revenue"):
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+    df = df.groupby("hour")[["installs", "ad_revenue"]].sum().reset_index().sort_values("hour")
+    df = df[df["installs"] >= min_installs_per_hour]
+    if len(df) < 2:
+        return []
+    df["ltv"] = df["ad_revenue"] / df["installs"].replace(0, pd.NA)
+    df = df.dropna(subset=["ltv"]).reset_index(drop=True)
+    if len(df) < 2:
+        return []
+
+    segments = []
+    current_dir = None
+    seg_start_idx = 0
+    for i in range(1, len(df)):
+        pct = _pct(df.loc[i - 1, "ltv"], df.loc[i, "ltv"])
+        if pct is None:
+            continue
+        if pct >= min_step_pct:
+            step_dir = "tang"
+        elif pct <= -min_step_pct:
+            step_dir = "giam"
+        else:
+            step_dir = None  # bước nhỏ/đi ngang — coi là nhiễu, không cắt đoạn
+
+        if step_dir is None:
+            continue
+        if current_dir is None:
+            current_dir = step_dir
+            seg_start_idx = i - 1
+        elif step_dir != current_dir:
+            segments.append(_build_segment(df, seg_start_idx, i - 1, current_dir))
+            current_dir = step_dir
+            seg_start_idx = i - 1
+
+    if current_dir is not None:
+        segments.append(_build_segment(df, seg_start_idx, len(df) - 1, current_dir))
+
+    return segments

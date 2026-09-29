@@ -1255,6 +1255,50 @@ def page_alerts():
             },
         )
 
+    # THÊM 29/09/2026 (theo yêu cầu user — chỉ ra 2 bảng trên LUÔN neo 1 đầu
+    # vào giờ CUỐI NGÀY nên "bị động, cho ít ý nghĩa": nếu LTV giảm 1 đoạn
+    # rồi hồi lại rồi giảm tiếp trong ngày, chỉ bắt được đoạn CUỐI, bỏ sót
+    # đoạn giảm-rồi-hồi ở giữa). Mục MỚI này KHÔNG neo giờ nào cả — quét toàn
+    # bộ 24 giờ, tách ra từng ĐOẠN tăng/giảm liên tục cho 1 campaign tự chọn
+    # (xem docstring ia.detect_trend_segments()).
+    st.divider()
+    st.subheader("Diễn biến chi tiết trong ngày theo từng campaign")
+    st.caption(
+        "2 bảng trên LUÔN so với giờ CUỐI NGÀY — có thể bỏ sót campaign giảm "
+        "rồi hồi lại (hoặc ngược lại) NHIỀU LẦN trong ngày. Chọn 1 campaign "
+        "để xem TOÀN BỘ khung giờ nào LTV giảm, khung giờ nào bắt đầu hồi "
+        "hoặc giảm trở lại — không neo vào giờ nào cả."
+    )
+    _trend_campaign_options = sorted(cum_df_scope["campaign"].dropna().unique()) if not cum_df_scope.empty else []
+    if not _trend_campaign_options:
+        st.info("Chưa có campaign nào đủ dữ liệu để xem.")
+    else:
+        _trend_selected_campaign = st.selectbox(
+            "Xem diễn biến của campaign nào?", _trend_campaign_options, key="al_trend_campaign",
+        )
+        _trend_app = cum_df_scope.loc[cum_df_scope["campaign"] == _trend_selected_campaign, "app"].iloc[0]
+        _segments = ia.detect_trend_segments(hourly_df, _trend_app, _trend_selected_campaign)
+        if not _segments:
+            st.caption(
+                "Không đủ dữ liệu giờ (hoặc quá ít install/giờ) để tách khung "
+                "giờ tăng/giảm cho campaign này."
+            )
+        else:
+            for _seg in _segments:
+                _seg_icon = "📈" if _seg["direction"] == "tang" else "📉"
+                _seg_word = "TĂNG" if _seg["direction"] == "tang" else "GIẢM"
+                st.markdown(
+                    f"- {_seg_icon} **{_seg['start_ts'][11:16]} → {_seg['end_ts'][11:16]}**: "
+                    f"LTV {_seg_word} **{_seg['pct_change']:+.0f}%** "
+                    f"(\\${_seg['start_ltv']:.4f} → \\${_seg['end_ltv']:.4f})"
+                )
+            st.caption(
+                "Dùng LTV THEO GIỜ (phát sinh trong giờ đó, không cộng dồn) — "
+                "khác cách tính ở 2 bảng trên (cộng dồn từ đầu ngày). Bỏ qua "
+                "bước đổi <10% giữa 2 giờ liền nhau (coi là nhiễu/đi ngang, "
+                "không tách thành đoạn riêng)."
+            )
+
 
 # ══════════════════════════════════════════════════════════════════════
 # TRANG — Xét nghiệm (Campaign Doctor): tầng 1 (CPI đắt vs User kém) + tầng 2

@@ -781,15 +781,33 @@ def page_alerts():
     # lúc chờ Meta API): mặc định NGÀY HÔM QUA (đã chốt, chi phí đáng tin hơn
     # "hôm nay" — xem GHI_CHU_TIEN_DO.md), nhưng vẫn cho chọn "Hôm nay" hoặc
     # bất kỳ ngày nào khác trong quá khứ để xem lại diễn biến trong ngày đó.
-    al_view_date = st.date_input(
-        "Xem diễn biến TRONG NGÀY của ngày nào?",
-        value=date.today() - timedelta(days=1),
+    #
+    # SỬA 29/09/2026 (theo yêu cầu user — "chọn ở chỗ này thì mình có thể
+    # chọn 2 ngày để xem khoảng thời gian giữa chúng ấy, chọn cái gì xem cái
+    # đó, không cần dài dòng"): ĐỔI thành 1 Ô DUY NHẤT cho phép chọn 1 NGÀY
+    # (giữ nguyên hành vi cũ — xem chi tiết THEO GIỜ trong ngày đó) HOẶC 2
+    # NGÀY khác nhau (xem xu hướng NGÀY QUA NGÀY trong khoảng đó) — KHÔNG
+    # thêm ô/mục riêng nào khác nữa (đã bỏ hẳn mục "Xu hướng nhiều ngày"
+    # tách riêng thêm hôm 24/09/2026 — gộp thẳng vào đây theo đúng ý user).
+    al_date_input = st.date_input(
+        "Xem diễn biến của ngày (hoặc khoảng ngày) nào?",
+        value=(date.today() - timedelta(days=1), date.today() - timedelta(days=1)),
         max_value=date.today(),
         key="al_view_date",
-        help="Mặc định hôm qua — ngày ĐÃ CHỐT thì chi phí đáng tin hơn \"hôm "
-        "nay\" (Adjust chỉ pull lại chi phí Facebook 1 lần/ngày, hôm nay có "
-        "thể chưa pull kịp). Chọn \"hôm nay\" nếu vẫn muốn xem số đang chạy.",
+        help="Chọn ĐÚNG 1 NGÀY → xem chi tiết THEO GIỜ trong ngày đó (như cũ). "
+        "Chọn 2 NGÀY KHÁC NHAU → xem xu hướng Installs/LTV NGÀY QUA NGÀY "
+        "trong khoảng đó. Mặc định hôm qua (đã chốt, chi phí đáng tin hơn "
+        "\"hôm nay\").",
     )
+    # date_input kiểu range trả về tuple — có thể chỉ mới 1 phần tử nếu user
+    # đang chọn dở (mới bấm 1 trong 2 ngày), phải xử lý phòng hờ.
+    if isinstance(al_date_input, tuple) and len(al_date_input) == 2:
+        al_start_date, al_end_date = al_date_input
+    else:
+        _picked = al_date_input[0] if isinstance(al_date_input, tuple) else al_date_input
+        al_start_date = al_end_date = _picked
+    al_is_single_day = al_start_date == al_end_date
+
     al_fetch_clicked = st.button("Apply", type="primary", key="al_fetch")
 
     al_min_installs = st.number_input(
@@ -809,14 +827,21 @@ def page_alerts():
         st.session_state.al_hourly_err = None
         st.session_state.al_campaign_channel_map = {}
         st.session_state.al_view_date_used = None
+        st.session_state.al_is_single_day_used = True
+        st.session_state.al_range_used = None
+        st.session_state.al_daily_range_df = None
+        st.session_state.al_daily_range_err = None
 
     if al_fetch_clicked:
-        al_view_date_str = al_view_date.isoformat()
+        al_view_date_str = al_end_date.isoformat()
 
         # Phần ngày ĐÃ CHỐT (không lấy hôm nay) — dùng cho trang "Xét nghiệm"
-        # (tầng 1/tầng 2 so benchmark + peer average). Phần "trong ngày" giờ
-        # kéo RIÊNG bằng dimension "hour" (xem intraday_alerts.py — thay thế
-        # hẳn cơ chế "chụp snapshot" cũ, KHÔNG cần lưu trữ/chạy ngầm gì nữa).
+        # (tầng 1/tầng 2 so benchmark + peer average, LUÔN neo theo
+        # `al_end_date` — kể cả khi user chọn 1 khoảng ngày, đây vẫn CHỈ
+        # phục vụ Xét nghiệm, KHÔNG phải khoảng ngày hiện ở dưới). Phần
+        # "trong ngày"/"nhiều ngày" giờ kéo RIÊNG bên dưới (xem
+        # intraday_alerts.py — thay thế hẳn cơ chế "chụp snapshot" cũ,
+        # KHÔNG cần lưu trữ/chạy ngầm gì nữa).
         #
         # end_date_str=al_view_date_str (THÊM 24/09/2026 — sửa bug "Không tìm
         # thấy dữ liệu Adjust cho campaign này" xảy ra với MỌI campaign khi
@@ -837,9 +862,30 @@ def page_alerts():
             st.session_state.al_product_used = al_product_id
             st.session_state.al_days_back_used = al_days_back
 
-        hourly_df, hourly_err = load_hourly_data(al_app_tokens_raw, al_api_token, al_view_date_str)
-        st.session_state.al_hourly_df = hourly_df
-        st.session_state.al_hourly_err = hourly_err
+        st.session_state.al_is_single_day_used = al_is_single_day
+        st.session_state.al_range_used = (al_start_date.isoformat(), al_end_date.isoformat())
+
+        if al_is_single_day:
+            hourly_df, hourly_err = load_hourly_data(al_app_tokens_raw, al_api_token, al_start_date.isoformat())
+            st.session_state.al_hourly_df = hourly_df
+            st.session_state.al_hourly_err = hourly_err
+            st.session_state.al_daily_range_df = None
+            st.session_state.al_daily_range_err = None
+        else:
+            # THÊM 29/09/2026 — user chọn 2 ngày KHÁC NHAU: kéo RIÊNG (không
+            # dính tới "Khoảng ngày kéo" của Xét nghiệm ở trên) đúng khoảng
+            # [al_start_date, al_end_date] user vừa chọn — "chọn cái gì xem
+            # cái đó", không suy đoán/dùng nhầm khoảng ngày khác.
+            _range_days_back = (al_end_date - al_start_date).days + 1
+            range_df, range_err, range_warning = load_adjust_data(
+                _range_days_back, al_app_tokens_raw, al_api_token, include_today=False, include_country=False,
+                end_date_str=al_end_date.isoformat(),
+            )
+            st.session_state.al_daily_range_df = range_df
+            st.session_state.al_daily_range_err = range_err
+            st.session_state.al_hourly_df = None
+            st.session_state.al_hourly_err = None
+
         st.session_state.al_view_date_used = al_view_date_str
 
         # Bản đồ campaign → network (channel) — để user tự biết campaign đang
@@ -862,6 +908,58 @@ def page_alerts():
 
     if st.session_state.al_raw_df is None:
         st.info("👆 Chọn app + khoảng ngày, nhập token Adjust rồi bấm **Apply** để bắt đầu.")
+        return
+
+    # SỬA 29/09/2026 (theo yêu cầu user): chọn 2 NGÀY KHÁC NHAU ở ô ngày phía
+    # trên → dừng ở đây, hiện xu hướng NGÀY QUA NGÀY thay cho toàn bộ phần
+    # "trong ngày" bên dưới (KHÔNG hiện cả 2 — "chọn cái gì xem cái đó").
+    if not st.session_state.get("al_is_single_day_used", True):
+        _start_used, _end_used = st.session_state.get("al_range_used") or (None, None)
+        st.subheader(f"📈 Xu hướng nhiều ngày — {_start_used} → {_end_used}")
+        st.caption(
+            "Installs/LTV thay đổi NGÀY QUA NGÀY trong đúng khoảng đã chọn ở "
+            "ô ngày phía trên (sum-then-divide đúng cách, không trung bình "
+            "cộng qua campaign). Chọn lại thành ĐÚNG 1 NGÀY ở ô đó để quay về "
+            "xem chi tiết THEO GIỜ."
+        )
+        if st.session_state.get("al_daily_range_err"):
+            st.error(f"❌ {st.session_state.al_daily_range_err}")
+            return
+        range_df = st.session_state.get("al_daily_range_df")
+        if range_df is None or range_df.empty:
+            st.info(f"Chưa có dữ liệu cho app {al_product_id} trong khoảng đã chọn.")
+            return
+
+        daily_scope = range_df[range_df["app"].str.startswith(al_product_id)].copy()
+        if daily_scope.empty:
+            st.info(f"Chưa có dữ liệu cho app {al_product_id} trong khoảng đã chọn.")
+            return
+
+        daily_campaign_options = ["(Cả app)"] + sorted(daily_scope["campaign"].dropna().unique())
+        al_daily_campaign = st.selectbox(
+            "Xem theo", daily_campaign_options, key="al_daily_campaign_filter",
+            help="Mặc định gộp CẢ APP (mọi campaign cộng lại) — chọn 1 "
+            "campaign cụ thể nếu muốn xem riêng.",
+        )
+        if al_daily_campaign != "(Cả app)":
+            daily_scope = daily_scope[daily_scope["campaign"] == al_daily_campaign]
+
+        for _col in ("installs", "ad_revenue"):
+            daily_scope[_col] = pd.to_numeric(daily_scope[_col], errors="coerce").fillna(0)
+        daily_totals = daily_scope.groupby("day")[["installs", "ad_revenue"]].sum().sort_index()
+        daily_totals["ltv"] = daily_totals["ad_revenue"] / daily_totals["installs"].replace(0, pd.NA)
+
+        if len(daily_totals) < 2:
+            st.info("Chỉ có 1 ngày có dữ liệu trong khoảng đã chọn — chọn khoảng rộng hơn để xem dạng biểu đồ.")
+            st.dataframe(daily_totals, width="stretch")
+        else:
+            dchart_col1, dchart_col2 = st.columns(2)
+            with dchart_col1:
+                st.caption("Installs theo ngày:")
+                st.bar_chart(daily_totals[["installs"]])
+            with dchart_col2:
+                st.caption("LTV theo ngày (= doanh thu ads ÷ installs phát sinh trong ngày đó):")
+                st.line_chart(daily_totals[["ltv"]])
         return
 
     if st.session_state.al_hourly_err:
@@ -1091,57 +1189,6 @@ def page_alerts():
                 "LTV % đổi": st.column_config.NumberColumn(format="%.1f%%"),
             },
         )
-
-    # THÊM 29/09/2026 (theo yêu cầu user — "phần cảnh báo chỉ cho xem diễn
-    # biến trong 1 ngày, có thể chọn khoảng ngày để xem sự biến đổi theo
-    # ngày không"): xem NGÀY QUA NGÀY, KHÁC với mọi phần phía trên (chỉ xem
-    # TRONG 1 NGÀY qua dimension "hour"). LƯU Ý: mục "xu hướng nhiều ngày" ở
-    # trang này từng bị XOÁ HẲN 22/09/2026 theo đúng yêu cầu user lúc đó
-    # ("tạm thời chỉ muốn build theo hướng realtime") — đây là user chủ động
-    # yêu cầu LẠI, không phải tự ý làm lại. Bản MỚI đơn giản hơn bản cũ đã
-    # xoá nhiều (không có ngưỡng "đột ngột"/"dần" riêng, không cần
-    # campaign_alerts.py) — CHỈ vẽ biểu đồ, tái dùng THẲNG `al_raw_df` (đã
-    # tải sẵn theo "Khoảng ngày kéo" ở trên, dimension "day" — KHÔNG cần gọi
-    # thêm API nào).
-    st.divider()
-    st.subheader("Xu hướng nhiều ngày")
-    st.caption(
-        "Installs/LTV thay đổi NGÀY QUA NGÀY trong \"Khoảng ngày kéo\" đã "
-        "chọn ở trên — khác với mọi biểu đồ/bảng phía trên (chỉ xem TRONG 1 "
-        f"NGÀY {_date_label})."
-    )
-    al_raw_df = st.session_state.al_raw_df
-    daily_scope = al_raw_df[al_raw_df["app"].str.startswith(al_product_id)].copy() if al_raw_df is not None else pd.DataFrame()
-    if daily_scope.empty:
-        st.info(f"Chưa có dữ liệu theo ngày cho app {al_product_id}.")
-    else:
-        daily_campaign_options = ["(Cả app)"] + sorted(daily_scope["campaign"].dropna().unique())
-        al_daily_campaign = st.selectbox(
-            "Xem theo", daily_campaign_options, key="al_daily_campaign_filter",
-            help="Mặc định gộp CẢ APP (mọi campaign cộng lại) — chọn 1 "
-            "campaign cụ thể nếu muốn xem riêng.",
-        )
-        if al_daily_campaign != "(Cả app)":
-            daily_scope = daily_scope[daily_scope["campaign"] == al_daily_campaign]
-
-        for _col in ("installs", "ad_revenue"):
-            daily_scope[_col] = pd.to_numeric(daily_scope[_col], errors="coerce").fillna(0)
-        daily_totals = daily_scope.groupby("day")[["installs", "ad_revenue"]].sum().sort_index()
-        daily_totals["ltv"] = daily_totals["ad_revenue"] / daily_totals["installs"].replace(0, pd.NA)
-
-        if len(daily_totals) < 2:
-            # Không vẽ biểu đồ với đúng 1 điểm — line_chart/bar_chart đều hiển
-            # thị sai (xem lý do tương tự ở "Xu hướng theo ngày" trang Adjust).
-            st.info("Chỉ có 1 ngày dữ liệu trong khoảng đã chọn — chọn thêm ngày ở \"Khoảng ngày kéo\" để xem dạng biểu đồ.")
-            st.dataframe(daily_totals, width="stretch")
-        else:
-            dchart_col1, dchart_col2 = st.columns(2)
-            with dchart_col1:
-                st.caption("Installs theo ngày:")
-                st.bar_chart(daily_totals[["installs"]])
-            with dchart_col2:
-                st.caption("LTV theo ngày (= doanh thu ads ÷ installs phát sinh trong ngày đó):")
-                st.line_chart(daily_totals[["ltv"]])
 
 
 # ══════════════════════════════════════════════════════════════════════

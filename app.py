@@ -1092,6 +1092,56 @@ def page_alerts():
             },
         )
 
+    # THÊM 29/09/2026 (theo yêu cầu user — "phần cảnh báo chỉ cho xem diễn
+    # biến trong 1 ngày, có thể chọn khoảng ngày để xem sự biến đổi theo
+    # ngày không"): xem NGÀY QUA NGÀY, KHÁC với mọi phần phía trên (chỉ xem
+    # TRONG 1 NGÀY qua dimension "hour"). LƯU Ý: mục "xu hướng nhiều ngày" ở
+    # trang này từng bị XOÁ HẲN 22/09/2026 theo đúng yêu cầu user lúc đó
+    # ("tạm thời chỉ muốn build theo hướng realtime") — đây là user chủ động
+    # yêu cầu LẠI, không phải tự ý làm lại. Bản MỚI đơn giản hơn bản cũ đã
+    # xoá nhiều (không có ngưỡng "đột ngột"/"dần" riêng, không cần
+    # campaign_alerts.py) — CHỈ vẽ biểu đồ, tái dùng THẲNG `al_raw_df` (đã
+    # tải sẵn theo "Khoảng ngày kéo" ở trên, dimension "day" — KHÔNG cần gọi
+    # thêm API nào).
+    st.divider()
+    st.subheader("Xu hướng nhiều ngày")
+    st.caption(
+        "Installs/LTV thay đổi NGÀY QUA NGÀY trong \"Khoảng ngày kéo\" đã "
+        "chọn ở trên — khác với mọi biểu đồ/bảng phía trên (chỉ xem TRONG 1 "
+        f"NGÀY {_date_label})."
+    )
+    al_raw_df = st.session_state.al_raw_df
+    daily_scope = al_raw_df[al_raw_df["app"].str.startswith(al_product_id)].copy() if al_raw_df is not None else pd.DataFrame()
+    if daily_scope.empty:
+        st.info(f"Chưa có dữ liệu theo ngày cho app {al_product_id}.")
+    else:
+        daily_campaign_options = ["(Cả app)"] + sorted(daily_scope["campaign"].dropna().unique())
+        al_daily_campaign = st.selectbox(
+            "Xem theo", daily_campaign_options, key="al_daily_campaign_filter",
+            help="Mặc định gộp CẢ APP (mọi campaign cộng lại) — chọn 1 "
+            "campaign cụ thể nếu muốn xem riêng.",
+        )
+        if al_daily_campaign != "(Cả app)":
+            daily_scope = daily_scope[daily_scope["campaign"] == al_daily_campaign]
+
+        for _col in ("installs", "ad_revenue"):
+            daily_scope[_col] = pd.to_numeric(daily_scope[_col], errors="coerce").fillna(0)
+        daily_totals = daily_scope.groupby("day")[["installs", "ad_revenue"]].sum().sort_index()
+        daily_totals["ltv"] = daily_totals["ad_revenue"] / daily_totals["installs"].replace(0, pd.NA)
+
+        if len(daily_totals) < 2:
+            # Không vẽ biểu đồ với đúng 1 điểm — line_chart/bar_chart đều hiển
+            # thị sai (xem lý do tương tự ở "Xu hướng theo ngày" trang Adjust).
+            st.info("Chỉ có 1 ngày dữ liệu trong khoảng đã chọn — chọn thêm ngày ở \"Khoảng ngày kéo\" để xem dạng biểu đồ.")
+            st.dataframe(daily_totals, width="stretch")
+        else:
+            dchart_col1, dchart_col2 = st.columns(2)
+            with dchart_col1:
+                st.caption("Installs theo ngày:")
+                st.bar_chart(daily_totals[["installs"]])
+            with dchart_col2:
+                st.caption("LTV theo ngày (= doanh thu ads ÷ installs phát sinh trong ngày đó):")
+                st.line_chart(daily_totals[["ltv"]])
 
 
 # ══════════════════════════════════════════════════════════════════════

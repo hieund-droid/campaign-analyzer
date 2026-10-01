@@ -998,8 +998,8 @@ def page_alerts():
 
     st.subheader(f"⚡ Cảnh báo trong ngày — {_date_label}")
     st.caption(
-        f"So với các mốc ~1/2/3/6 tiếng trước TRONG {_date_label.upper()} — lấy "
-        "TRỰC TIẾP lịch sử theo GIỜ từ Adjust. **CHỈ dùng LTV** (doanh thu ads "
+        f"Mỗi campaign TỰ tìm khung giờ nào trong {_date_label.upper()} cho LTV "
+        "đổi nhiều nhất — lấy TRỰC TIẾP lịch sử theo GIỜ từ Adjust. **CHỈ dùng LTV** (doanh thu ads "
         "÷ installs, đổi 23/09/2026) — đã BỎ HẲN CPI/ROAS theo giờ: kiểm chứng "
         "bằng số thật (nhiều ngày) cho thấy Adjust dồn TOÀN BỘ chi phí của CẢ "
         "NGÀY vào ĐÚNG 1 GIỜ DUY NHẤT (thường 00:00), 23 giờ còn lại luôn $0 — "
@@ -1011,11 +1011,12 @@ def page_alerts():
     al_realtime_pct = st.number_input(
         "Mức LTV thay đổi cần báo động (%)",
         min_value=5, value=20, step=5, key="al_realtime_pct",
-        help="Mỗi campaign tự so với giờ nào trong tối đa 6 tiếng trước cho "
-        "LTV đổi NHIỀU NHẤT (không ép chung 1 mốc cho mọi campaign, nhưng "
-        "cũng không so quá xa — tránh so cả gần 1 ngày ra kết luận mơ hồ) — "
-        "bắt CẢ 2 CHIỀU: LTV tăng HOẶC giảm từ mức này trở lên đều hiện cảnh "
-        "báo, để vừa phát hiện vấn đề vừa phát hiện cơ hội tăng ngân sách.",
+        help="Mỗi campaign tự so với giờ nào trong ngày cho LTV đổi NHIỀU "
+        "NHẤT (không ép chung 1 mốc/khung giờ cho mọi campaign — có thể là "
+        "swing ngắn vài tiếng hoặc xu hướng kéo dài cả ngày) — bắt CẢ 2 "
+        "CHIỀU: LTV tăng HOẶC giảm từ mức này trở lên đều hiện cảnh báo, để "
+        "vừa phát hiện vấn đề vừa phát hiện cơ hội tăng ngân sách. Xem cột "
+        "\"Diễn biến trong ngày\" để biết CỤ THỂ khung giờ nào tăng/giảm.",
     )
 
     hourly_df = st.session_state.al_hourly_df
@@ -1097,9 +1098,42 @@ def page_alerts():
         else:
             st.caption("Không có dữ liệu cho lựa chọn này.")
 
-    all_flagged_today = ia.list_flagged_best_swing(
-        cum_df_scope, threshold_pct=float(al_realtime_pct), min_installs=int(al_min_installs)
-    )
+    # SỬA 29/09/2026 — user chỉ ra "chỉ có 3 campaign có biến động, chắc chắn
+    # không thể ít như vậy". Đã tìm ra 2 NGUYÊN NHÂN CHỒNG NHAU (xem thêm
+    # GHI_CHU_TIEN_DO.md):
+    # 1. max_gap_hours=6 (thêm 24/09/2026) tránh được kết quả "quá rộng, khó
+    #    hiểu" nhưng lại BỎ SÓT xu hướng diễn ra CHẬM hơn 6 tiếng — bỏ giới
+    #    hạn này ở bước GẮN CỜ (max_gap_hours=None), dời việc giải thích
+    #    "khung giờ nào cụ thể" sang cột "Diễn biến trong ngày" (không neo
+    #    giờ, không giới hạn khoảng cách).
+    # 2. SÂU HƠN: bản thân phép so LTV CỘNG DỒN (arpu, dùng cho "Chiều"/"LTV
+    #    % đổi") có GIỚI HẠN TOÁN HỌC — đã kiểm chứng bằng số giả lập: LTV
+    #    THEO GIỜ (marginal) giảm ĐỀU 25% suốt 12 tiếng chỉ làm LTV CỘNG DỒN
+    #    đổi -12.5% (đúng 1 nửa — cộng dồn là trung bình cộng cả dãy, không
+    #    phải giá trị 2 đầu) — CÀNG VỀ CUỐI NGÀY càng "pha loãng" xu hướng
+    #    thật. Bỏ max_gap_hours (mục 1) KHÔNG sửa được vấn đề này. Vì vậy
+    #    thêm NGUỒN GẮN CỜ THỨ 2 — `list_flagged_by_trend_segments()` — dựa
+    #    trên LTV THEO GIỜ (không cộng dồn, không bị pha loãng) qua
+    #    `detect_trend_segments()` đã có sẵn cho cột "Diễn biến trong ngày".
+    #    Gộp 2 nguồn lại theo campaign — nếu CẢ 2 đều gắn cờ cùng 1 campaign,
+    #    GIỮ BẢN CÓ |% ĐỔI| LỚN HƠN (đáng chú ý hơn), KHÔNG mặc định ưu tiên
+    #    nguồn cộng dồn — đã kiểm chứng bằng số giả lập: có case cộng dồn vẫn
+    #    còn dư "quán tính" cho ra dấu SAI (VD "Tăng" +25% trong khi marginal
+    #    đúng là "Giảm" -40%) — nếu luôn ưu tiên cộng dồn khi trùng, vẫn hiện
+    #    sai dấu y hệt lúc chưa sửa.
+    _by_campaign = {}
+    for f in ia.list_flagged_best_swing(
+        cum_df_scope, threshold_pct=float(al_realtime_pct), min_installs=int(al_min_installs),
+        max_gap_hours=None,
+    ):
+        _by_campaign[f["campaign"]] = f
+    for f in ia.list_flagged_by_trend_segments(
+        cum_df_scope, hourly_df, threshold_pct=float(al_realtime_pct), min_installs=int(al_min_installs)
+    ):
+        _existing = _by_campaign.get(f["campaign"])
+        if _existing is None or abs(f["arpu_pct_change"] or 0) > abs(_existing["arpu_pct_change"] or 0):
+            _by_campaign[f["campaign"]] = f
+    all_flagged_today = sorted(_by_campaign.values(), key=lambda f: f.get("arpu_pct_change") or 0)
     # Lưu lại để trang "Xét nghiệm" đọc danh sách campaign đang bị cảnh báo.
     st.session_state.al_realtime_flagged = all_flagged_today
 
@@ -1162,7 +1196,8 @@ def page_alerts():
                         _diag_parts.append(
                             f"{_diag_qualifying_n} campaign đủ điều kiện — KHÔNG campaign nào trong "
                             f"số này LTV đổi (tăng hoặc giảm) quá {int(al_realtime_pct)}% dù đã tự so "
-                            "với mọi giờ trong tối đa 6 tiếng trước (tự chọn giờ, không ép mốc cố định)."
+                            "với MỌI giờ khác trong ngày theo CẢ 2 cách đo (LTV cộng dồn LẪN LTV theo "
+                            "giờ không cộng dồn — không ép mốc/khung giờ cố định nào)."
                         )
             st.info(" ".join(_diag_parts))
     else:
@@ -1172,24 +1207,25 @@ def page_alerts():
         # xa (lẽ ra phải là "Installs cuối ngày"/"LTV cuối ngày" như cột giờ đã
         # tự đổi đúng) — sửa dùng chung 1 biến để nhất quán.
         _end_word = _now_or_end_label.lower()
-        # THÊM 29/09/2026 (theo yêu cầu user — "không thể trình bày luôn tại
-        # bảng này à" thay vì tách riêng mục/dropdown bên dưới): cột "Diễn
-        # biến trong ngày" tóm tắt NGAY trong bảng toàn bộ các đoạn tăng/giảm
-        # LTV trong ngày (không neo giờ nào — xem docstring
-        # ia.detect_trend_segments()/format_trend_segments()), để không cần
-        # chọn riêng 1 campaign ở mục khác mới thấy được.
+        # SỬA 29/09/2026 (user báo "vẫn chưa thấy thanh trượt để kéo bảng
+        # sang ngang" dù đã height=400 + giới hạn width từng cột — có vẻ môi
+        # trường/webview đang dùng không hiện/thao tác được thanh cuộn ngang
+        # của widget dataframe dù đã có, KHÔNG sửa được từ phía code): GIẢM
+        # HẲN SỐ CỘT thay vì chỉ giảm độ rộng — gộp "Lúc đó"/"Cuối ngày" +
+        # "Khoảng cách (tự động)" thành 1 cột "Khung giờ" (VD "18:00 → 23:00
+        # (5.0h)"), gộp "Installs lúc đó"/"cuối ngày" thành 1 cột "Installs"
+        # (VD "41 → 41"), gộp "LTV lúc đó"/"cuối ngày" thành 1 cột "LTV" (VD
+        # "$0.15 → $0.09") — từ 12 cột xuống còn 8 cột, bảng hẹp hơn NHIỀU,
+        # giảm hẳn khả năng phải cuộn ngang mới thấy hết (thay vì chỉ trông
+        # chờ vào thanh cuộn hoạt động đúng).
         realtime_rows = [
             {
                 "Campaign": f["campaign"],
                 "Nguồn": _channel_map.get(f["campaign"], "?"),
                 "Chiều": "📈 Tăng" if f["direction"] == "tang" else "📉 Giảm",
-                "Khoảng cách (tự động)": f"{f['actual_hours_gap']:.1f}h",
-                "Lúc đó": f["baseline_ts"][11:16],
-                _now_or_end_label: f["latest_ts"][11:16],
-                "Installs lúc đó": f["baseline"].get("installs_cum"),
-                f"Installs {_end_word}": f["latest"].get("installs_cum"),
-                "LTV lúc đó": f["baseline"].get("arpu"),
-                f"LTV {_end_word}": f["latest"].get("arpu"),
+                "Khung giờ": f"{f['baseline_ts'][11:16]} → {f['latest_ts'][11:16]} ({f['actual_hours_gap']:.1f}h)",
+                "Installs": f"{f['baseline'].get('installs_cum') or 0} → {f['latest'].get('installs_cum') or 0}",
+                "LTV": f"${f['baseline'].get('arpu') or 0:.4f} → ${f['latest'].get('arpu') or 0:.4f}",
                 "LTV % đổi": f["arpu_pct_change"],
                 "Diễn biến trong ngày": ia.format_trend_segments(
                     ia.detect_trend_segments(hourly_df, f["app"], f["campaign"])
@@ -1201,43 +1237,35 @@ def page_alerts():
         st.dataframe(
             _realtime_df.style.map(_color_pct, subset=["LTV % đổi"]),
             width="stretch", hide_index=True,
-            # THÊM 29/09/2026 (user báo "không kéo được theo chiều ngang" —
-            # bảng quá rộng, nhiều môi trường/webview không cuộn ngang được
-            # bảng của Streamlit bằng chuột/trackpad): giới hạn RIÊNG độ rộng
-            # từng cột thay vì để TỰ ĐỘNG auto-width (vốn kéo dài hết mức theo
-            # nội dung, đặc biệt cột "Campaign" tên rất dài) — bảng gọn lại
-            # đáng kể, giảm hẳn nhu cầu phải cuộn ngang mới thấy hết cột.
+            height=400,
             column_config={
                 "Campaign": st.column_config.TextColumn(width="medium"),
                 "Nguồn": st.column_config.TextColumn(width="small"),
                 "Chiều": st.column_config.TextColumn(width="small"),
-                "Khoảng cách (tự động)": st.column_config.TextColumn(width="small"),
-                "Lúc đó": st.column_config.TextColumn(width="small"),
-                _now_or_end_label: st.column_config.TextColumn(width="small"),
-                "Installs lúc đó": st.column_config.NumberColumn(width="small"),
-                f"Installs {_end_word}": st.column_config.NumberColumn(width="small"),
-                "LTV lúc đó": st.column_config.NumberColumn(format="$%.4f", width="small"),
-                f"LTV {_end_word}": st.column_config.NumberColumn(format="$%.4f", width="small"),
+                "Khung giờ": st.column_config.TextColumn(width="medium"),
+                "Installs": st.column_config.TextColumn(width="small"),
+                "LTV": st.column_config.TextColumn(width="medium"),
                 "LTV % đổi": st.column_config.NumberColumn(format="%.1f%%", width="small"),
                 "Diễn biến trong ngày": st.column_config.TextColumn(width="medium"),
             },
         )
         st.caption(
-            "Mỗi campaign TỰ quét giờ nó có dữ liệu trong TỐI ĐA 6 tiếng "
-            "trước để tìm cặp giờ cho LTV đổi NHIỀU NHẤT (không ép cùng 1 "
-            "mốc cho mọi campaign, nhưng cũng không so quá xa cả ngày — đổi "
-            "24/09/2026) — cột \"Khoảng cách (tự động)\" cho biết campaign đó "
-            "cách nhau bao nhiêu tiếng. Cột \"Chiều\" cho biết đang là cơ hội "
+            "Campaign vào bảng này nếu vượt ngưỡng theo 1 TRONG 2 cách đo: "
+            "LTV CỘNG DỒN (mỗi campaign TỰ quét MỌI giờ nó có dữ liệu, không "
+            "ép mốc/khung giờ, không giới hạn khoảng cách) HOẶC LTV THEO GIỜ "
+            "không cộng dồn (bắt được cả xu hướng chậm/trải dài mà cách cộng "
+            "dồn có thể bỏ sót — xem cột \"Diễn biến trong ngày\"). Cột "
+            "\"Khung giờ\"/\"Installs\"/\"LTV\" đều dạng \"lúc đó → "
+            f"{_end_word}\". Cột \"Chiều\" cho biết đang là cơ hội "
             "(📈 tăng) hay vấn đề (📉 giảm). Cột \"Diễn biến trong ngày\" liệt "
             "kê tối đa 3 đoạn tăng/giảm LTV ĐÁNG CHÚ Ý NHẤT trong ngày (\"—\" "
             "= campaign quá ít install/giờ để tách đoạn đáng tin) — dùng LTV "
-            "theo giờ KHÔNG cộng dồn (khác cách tính ở các cột LTV khác trong "
-            "bảng này), nên có thể \"nhìn trái chiều\" với cột \"Chiều\" ở "
-            "cùng 1 dòng — KHÔNG PHẢI lỗi, chỉ là 2 cách đo khác nhau: \"Chiều\" "
-            "so sánh CỘNG DỒN từ 1 mốc tới cuối ngày, còn \"Diễn biến trong "
-            "ngày\" tách RIÊNG từng khung giờ cụ thể tăng hay giảm. Vào trang "
-            "**Xét nghiệm** để xem gợi ý "
-            "hành động tương ứng."
+            "theo giờ KHÔNG cộng dồn (khác cách tính ở cột \"LTV\"), nên có "
+            "thể \"nhìn trái chiều\" với cột \"Chiều\" ở cùng 1 dòng — KHÔNG "
+            "PHẢI lỗi, chỉ là 2 cách đo khác nhau: \"Chiều\" so sánh CỘNG DỒN "
+            "từ 1 mốc tới cuối ngày, còn \"Diễn biến trong ngày\" tách RIÊNG "
+            "từng khung giờ cụ thể tăng hay giảm. Vào trang **Xét nghiệm** để "
+            "xem gợi ý hành động tương ứng."
         )
 
     st.divider()
@@ -1261,17 +1289,17 @@ def page_alerts():
         st.caption(f"Chưa có gì vượt ngưỡng so với ~{int(al_since_hour):02d}h00 của {_date_label}.")
     else:
         _end_word = _now_or_end_label.lower()
+        # Gộp cột — xem comment ở bảng "so mấy tiếng trước" phía trên (cùng
+        # lý do: user báo vẫn không thấy thanh trượt cuộn ngang, giảm hẳn số
+        # cột thay vì chỉ trông chờ thanh cuộn).
         since_hour_rows = [
             {
                 "Campaign": f["campaign"],
                 "Nguồn": _channel_map.get(f["campaign"], "?"),
                 "Chiều": "📈 Tăng" if f["direction"] == "tang" else "📉 Giảm",
-                f"Lúc ~{int(al_since_hour):02d}h": f["baseline_ts"][11:16],
-                _now_or_end_label: f["latest_ts"][11:16],
-                "Installs lúc đó": f["baseline"].get("installs_cum"),
-                f"Installs {_end_word}": f["latest"].get("installs_cum"),
-                "LTV lúc đó": f["baseline"].get("arpu"),
-                f"LTV {_end_word}": f["latest"].get("arpu"),
+                "Khung giờ": f"~{int(al_since_hour):02d}h → {f['latest_ts'][11:16]} ({f['actual_hours_gap']:.1f}h)",
+                "Installs": f"{f['baseline'].get('installs_cum') or 0} → {f['latest'].get('installs_cum') or 0}",
+                "LTV": f"${f['baseline'].get('arpu') or 0:.4f} → ${f['latest'].get('arpu') or 0:.4f}",
                 "LTV % đổi": f["arpu_pct_change"],
                 "Diễn biến trong ngày": ia.format_trend_segments(
                     ia.detect_trend_segments(hourly_df, f["app"], f["campaign"])
@@ -1283,18 +1311,14 @@ def page_alerts():
         st.dataframe(
             _since_hour_df.style.map(_color_pct, subset=["LTV % đổi"]),
             width="stretch", hide_index=True,
-            # Giới hạn độ rộng từng cột — xem comment ở bảng "so mấy tiếng
-            # trước" phía trên (cùng lý do: user báo không cuộn ngang được).
+            height=400,
             column_config={
                 "Campaign": st.column_config.TextColumn(width="medium"),
                 "Nguồn": st.column_config.TextColumn(width="small"),
                 "Chiều": st.column_config.TextColumn(width="small"),
-                f"Lúc ~{int(al_since_hour):02d}h": st.column_config.TextColumn(width="small"),
-                _now_or_end_label: st.column_config.TextColumn(width="small"),
-                "Installs lúc đó": st.column_config.NumberColumn(width="small"),
-                f"Installs {_end_word}": st.column_config.NumberColumn(width="small"),
-                "LTV lúc đó": st.column_config.NumberColumn(format="$%.4f", width="small"),
-                f"LTV {_end_word}": st.column_config.NumberColumn(format="$%.4f", width="small"),
+                "Khung giờ": st.column_config.TextColumn(width="medium"),
+                "Installs": st.column_config.TextColumn(width="small"),
+                "LTV": st.column_config.TextColumn(width="medium"),
                 "LTV % đổi": st.column_config.NumberColumn(format="%.1f%%", width="small"),
                 "Diễn biến trong ngày": st.column_config.TextColumn(width="medium"),
             },
@@ -1458,7 +1482,52 @@ def page_campaign_doctor():
 
     stats = cdoc.period_stats_for_campaign(raw_df, product_id, selected_campaign)
     if stats is None:
-        st.warning("Không tìm thấy dữ liệu Adjust cho campaign này (có thể do đổi bộ lọc).")
+        # THÊM 01/10/2026 (user báo lỗi này VẪN xảy ra sau bản sửa 24/09/2026
+        # — cần chẩn đoán CHÍNH XÁC thay vì đoán, đúng tinh thần "không đoán
+        # số"): phân biệt RÕ 3 tình huống khác nhau, mỗi tình huống nguyên
+        # nhân khác hẳn nhau — thông báo cũ gộp chung "có thể do đổi bộ lọc"
+        # không đủ để biết THẬT SỰ đang ở tình huống nào.
+        _diag_app_df = raw_df[raw_df["app"].astype(str).str.startswith(product_id, na=False)] if raw_df is not None else None
+        if _diag_app_df is None or _diag_app_df.empty:
+            # (1) App này KHÔNG có dòng nào trong bảng theo NGÀY — khác hẳn
+            # bảng theo GIỜ (nơi campaign đang bị cảnh báo lấy dữ liệu từ đó).
+            st.warning(
+                f"Không tìm thấy dữ liệu theo NGÀY cho app **{product_id}** trong "
+                f"\"Khoảng ngày kéo\" đã chọn ({days_back_used} ngày, tính tới ngày "
+                "đang xem ở Cảnh báo) — thử tăng số ngày kéo ở trang Cảnh báo rồi "
+                "bấm Apply lại."
+            )
+        else:
+            _known_campaigns = sorted(_diag_app_df["campaign"].dropna().unique())
+            if selected_campaign in _known_campaigns:
+                # (2) CÓ đúng tên campaign trong dữ liệu theo ngày, nhưng
+                # period_stats_for_campaign() vẫn trả None — nghĩa là installs
+                # cộng dồn bằng 0 (xem công thức: cpi/arpu_d0 chia cho installs,
+                # không phải do KHÔNG tìm thấy dòng nào).
+                st.warning(
+                    f"App **{product_id}** CÓ dữ liệu theo ngày cho đúng campaign "
+                    "này, nhưng installs cộng dồn trong \"Khoảng ngày kéo\" bằng 0 "
+                    "nên không tính được CPI/LTV (campaign có thể chỉ mới chạy "
+                    "ĐÚNG ngày đang xem ở Cảnh báo, chưa có install nào ở những "
+                    "ngày trước đó trong khoảng kéo)."
+                )
+            else:
+                # (3) App CÓ dữ liệu theo ngày, nhưng KHÔNG CÓ dòng nào khớp
+                # TUYỆT ĐỐI với đúng tên campaign này — hoặc campaign quá mới
+                # (chỉ chạy đúng ngày đang xem, chưa "lọt" vào bảng theo ngày),
+                # hoặc tên campaign có ký tự đặc biệt không khớp giữa 2 nguồn.
+                _sel_norm = selected_campaign.strip().lower()
+                _similar = [c for c in _known_campaigns if _sel_norm in c.strip().lower() or c.strip().lower() in _sel_norm]
+                st.warning(
+                    f"App **{product_id}** có dữ liệu theo ngày, nhưng KHÔNG CÓ "
+                    f"campaign nào khớp ĐÚNG tên **{selected_campaign}** trong "
+                    f"\"Khoảng ngày kéo\" đã chọn ({days_back_used} ngày) — dù "
+                    "campaign này ĐANG bị cảnh báo (lấy từ bảng theo GIỜ, nguồn "
+                    "khác). Có thể campaign quá mới (chỉ chạy đúng ngày đang xem "
+                    "ở Cảnh báo, chưa có mặt trong khoảng ngày kéo trước đó)."
+                )
+                if _similar:
+                    st.caption("Tên gần giống tìm thấy trong dữ liệu theo ngày: " + ", ".join(f"`{s}`" for s in _similar[:5]))
         return
 
     st.divider()

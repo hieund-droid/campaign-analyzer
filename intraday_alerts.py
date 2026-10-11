@@ -103,6 +103,7 @@ def _compare_to_target(cum_df: pd.DataFrame, app: str, campaign: str, target_dt:
 
 DEFAULT_MAX_GAP_HOURS = 6.0
 DEFAULT_MIN_BASELINE_INSTALLS_RATIO = 0.2
+DEFAULT_MIN_ABSOLUTE_INSTALLS_FOR_RATIO = 15
 
 
 def find_best_swing(
@@ -112,6 +113,7 @@ def find_best_swing(
     min_installs: int = 0,
     max_gap_hours: float = DEFAULT_MAX_GAP_HOURS,
     min_baseline_installs_ratio: float = DEFAULT_MIN_BASELINE_INSTALLS_RATIO,
+    min_absolute_installs: int = DEFAULT_MIN_ABSOLUTE_INSTALLS_FOR_RATIO,
 ) -> dict | None:
     """THAY THẾ bộ mốc CỐ ĐỊNH (1/2/3/6 tiếng trước, áp dụng chung cho MỌI
     campaign) — đổi 24/09/2026 theo yêu cầu user ("mốc cố định quá cứng
@@ -154,7 +156,18 @@ def find_best_swing(
     hợp lệ nếu installs_cum của nó ĐẠT ÍT NHẤT `min_baseline_installs_ratio`
     (mặc định 20%) của installs_cum ở giờ MỚI NHẤT — loại bỏ các giờ đầu
     ngày quá thưa thớt để làm mốc so sánh, dù campaign đó có đủ install TỔNG
-    (`min_installs`) hay không."""
+    (`min_installs`) hay không.
+
+    `min_absolute_installs` (MỚI 11/10/2026 — user VẪN thấy "LTV % đổi" lên
+    tới hơn 1000%/vài trăm % sau khi đã có `min_baseline_installs_ratio`):
+    với campaign TỔNG install CẢ NGÀY vốn đã thấp (VD 30-80), 20% của con số
+    đó chỉ là 6-16 install — vẫn ĐỦ NHỎ để bị hiệu ứng "cold start" như trên
+    (tỉ lệ TƯƠNG ĐỐI không bảo vệ được khi CẢ NGÀY đã ít install). Thêm sàn
+    TUYỆT ĐỐI (mặc định 15 install, ĐỘC LẬP với `min_installs` do user tự
+    chỉnh ở ô "Install tối thiểu" — ô đó là để quyết định campaign có ĐÁNG
+    đưa vào bảng cảnh báo hay không, KHÁC câu hỏi "mẫu này đủ lớn để tin cậy
+    con số LTV của nó hay chưa") — baseline phải đạt CẢ 2: tỉ lệ % VÀ số
+    tuyệt đối tối thiểu mới hợp lệ."""
     g = cum_df[(cum_df["app"] == app) & (cum_df["campaign"] == campaign)]
     hours_sorted = sorted(g["hour"].unique())
     if len(hours_sorted) < 2:
@@ -164,8 +177,9 @@ def find_best_swing(
     latest = g[g["hour"] == latest_hour].iloc[0]
     latest_dt = datetime.fromisoformat(latest_hour)
     latest_installs_cum = latest.get("installs_cum") or 0
-    min_baseline_installs = (
-        min_baseline_installs_ratio * latest_installs_cum if min_baseline_installs_ratio else 0
+    min_baseline_installs = max(
+        min_baseline_installs_ratio * latest_installs_cum if min_baseline_installs_ratio else 0,
+        min_absolute_installs or 0,
     )
 
     best = None
@@ -299,6 +313,7 @@ def detect_trend_segments(
     min_step_pct: float = DEFAULT_TREND_MIN_STEP_PCT,
     min_total_installs: int = DEFAULT_TREND_MIN_TOTAL_INSTALLS,
     min_endpoint_installs_ratio: float = DEFAULT_MIN_BASELINE_INSTALLS_RATIO,
+    min_absolute_installs: int = DEFAULT_MIN_ABSOLUTE_INSTALLS_FOR_RATIO,
 ) -> list:
     """THÊM 29/09/2026 (theo yêu cầu user — chỉ ra `find_best_swing()` LUÔN
     neo 1 đầu vào giờ MỚI NHẤT trong ngày (VD 23h), nên "bị động, cho ít ý
@@ -378,8 +393,9 @@ def detect_trend_segments(
     # đầu tiên user cài, chưa kịp sinh doanh thu, làm LTV giờ đó thấp giả tạo.
     df["installs_running_cum"] = df["installs"].cumsum()
     final_installs_cum = df["installs_running_cum"].iloc[-1]
-    min_endpoint_installs = (
-        min_endpoint_installs_ratio * final_installs_cum if min_endpoint_installs_ratio else 0
+    min_endpoint_installs = max(
+        min_endpoint_installs_ratio * final_installs_cum if min_endpoint_installs_ratio else 0,
+        min_absolute_installs or 0,
     )
     if min_endpoint_installs:
         df = df[df["installs_running_cum"] >= min_endpoint_installs].reset_index(drop=True)
@@ -477,6 +493,7 @@ def find_best_marginal_swing(
     min_installs_per_hour: int = DEFAULT_TREND_MIN_INSTALLS_PER_HOUR,
     min_total_installs: int = DEFAULT_TREND_MIN_TOTAL_INSTALLS,
     min_endpoint_installs_ratio: float = DEFAULT_MIN_BASELINE_INSTALLS_RATIO,
+    min_absolute_installs: int = DEFAULT_MIN_ABSOLUTE_INSTALLS_FOR_RATIO,
 ) -> dict | None:
     """So SÁNH TRỰC TIẾP 2 giờ CÓ % ĐỔI LỚN NHẤT trong toàn bộ LTV THEO GIỜ
     (marginal, không cộng dồn) — quét TẤT CẢ cặp (không chỉ 2 giờ LIỀN KỀ như
@@ -503,7 +520,11 @@ def find_best_marginal_swing(
     dồn, vì hàm này không có khái niệm neo 1 đầu cố định) phải có SỐ INSTALL
     CỘNG DỒN TÍNH ĐẾN GIỜ ĐÓ (trong phạm vi dữ liệu đã lọc) đạt ít nhất tỉ lệ
     này so với install cộng dồn CUỐI CÙNG — loại bỏ các giờ đầu ngày quá sớm
-    làm điểm so sánh."""
+    làm điểm so sánh.
+
+    `min_absolute_installs` (MỚI 11/10/2026 — cùng lý do với `find_best_
+    swing()`: campaign TỔNG install cả ngày thấp thì tỉ lệ % ở trên quy ra số
+    tuyệt đối vẫn quá nhỏ để đáng tin) — sàn TUYỆT ĐỐI, ĐỘC LẬP với tỉ lệ."""
     if hourly_df is None or hourly_df.empty:
         return None
     df = hourly_df[(hourly_df["app"] == app) & (hourly_df["campaign"] == campaign)].copy()
@@ -521,7 +542,10 @@ def find_best_marginal_swing(
         return None
     df["installs_running_cum"] = df["installs"].cumsum()
     final_installs_cum = df["installs_running_cum"].iloc[-1]
-    min_endpoint_installs = min_endpoint_installs_ratio * final_installs_cum if min_endpoint_installs_ratio else 0
+    min_endpoint_installs = max(
+        min_endpoint_installs_ratio * final_installs_cum if min_endpoint_installs_ratio else 0,
+        min_absolute_installs or 0,
+    )
 
     best = None
     n = len(df)

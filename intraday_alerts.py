@@ -292,13 +292,28 @@ DEFAULT_TREND_MIN_STEP_PCT = 10.0
 def _build_segment(hourly_ltv_df: pd.DataFrame, start_idx: int, end_idx: int, direction: str) -> dict:
     start_row = hourly_ltv_df.loc[start_idx]
     end_row = hourly_ltv_df.loc[end_idx]
+    pct_change = _pct(start_row["ltv"], end_row["ltv"])
+    # SỬA 12/10/2026 (BUG THẬT phát hiện qua test khi xây tính năng tương tự
+    # cho Tổng quan thị trường — KHÔNG phải nhiễu/thiếu dữ liệu như lần sửa
+    # 29/09/2026 trước đó): `direction` truyền vào là `current_dir` — nhãn
+    # được "kế thừa" từ BƯỚC tăng/giảm LỚN gần nhất kích hoạt đoạn, rồi GIỮ
+    # NGUYÊN qua các bước nhỏ sau đó (< min_step_pct, coi là đi ngang). Nếu
+    # chuỗi bước nhỏ đó âm thầm kéo ngược hướng đủ nhiều, % đổi THẬT của CẢ
+    # đoạn (so điểm đầu với điểm cuối) có thể NGƯỢC DẤU với `direction` — y
+    # hệt đúng triệu chứng user từng báo ("Chiều giảm nhưng Diễn biến dùng
+    # icon tăng"), lần này do cơ chế KHÁC (không phải do lọc/bắc cầu dữ liệu
+    # thưa — xảy ra ngay cả khi dữ liệu đầy đủ). SỬA: luôn ưu tiên DẤU THẬT
+    # của `pct_change` (so điểm đầu-cuối của chính đoạn) làm `direction` hiển
+    # thị — chỉ dùng `direction` truyền vào (nhãn bước kích hoạt) khi
+    # `pct_change` là None (LTV điểm đầu = 0, không tính được %).
+    final_direction = direction if pct_change is None else ("tang" if pct_change >= 0 else "giam")
     return {
-        "direction": direction,
+        "direction": final_direction,
         "start_ts": start_row["hour"],
         "end_ts": end_row["hour"],
         "start_ltv": start_row["ltv"],
         "end_ltv": end_row["ltv"],
-        "pct_change": _pct(start_row["ltv"], end_row["ltv"]),
+        "pct_change": pct_change,
     }
 
 
@@ -445,6 +460,64 @@ def detect_trend_segments(
 
 
 DEFAULT_TREND_MAX_SEGMENTS_SHOWN = 3
+
+# THÊM 12/10/2026 (theo yêu cầu user — câu gợi ý ở Xét nghiệm > Theo campaign
+# chỉ nói chung chung "khung giờ 16:00-23:00 kém", KHÔNG nói rõ đúng lúc nào
+# BẮT ĐẦU giảm để action: "tôi muốn phân tích được là khung giờ nào bắt đầu
+# giảm và đưa ra suggest cụ thể hơn ... đến khung này nó giảm thì nên giảm
+# budget hay tăng"). `detect_trend_segments()` đã tách sẵn các ĐOẠN có điểm
+# BẮT ĐẦU rõ ràng (start_ts) — chỉ cần lấy ĐOẠN GẦN NHẤT (sát cuối ngày,
+# khớp với "latest" mà find_best_swing() đang neo vào) và build câu hành
+# động từ đó.
+MIN_SEGMENT_HOURS_FOR_ACTION = 2.0
+
+
+def describe_actionable_segment(
+    segments: list, min_segment_hours: float = MIN_SEGMENT_HOURS_FOR_ACTION, lead_hours: int = 1
+) -> str:
+    """Lấy ĐOẠN GẦN CUỐI NGÀY NHẤT trong `segments` (kết quả
+    detect_trend_segments()) — đây là xu hướng ĐANG diễn ra tính đến cuối
+    ngày, khớp với "latest" mà find_best_swing() luôn neo vào. CHỈ đưa ra
+    gợi ý hành động CỤ THỂ (tăng/giảm ngân sách TỪ giờ nào) nếu đoạn đó đủ
+    DÀI (>= `min_segment_hours`, mặc định 2 tiếng) — đoạn NGẮN (VD LTV chỉ
+    cao đúng 1 giờ rồi xuống ngay) theo đúng yêu cầu user ("nếu LTV chỉ cao
+    ở 1 khung giờ rồi nó down xuống thì việc action tăng budget ở khung giờ
+    đó sẽ không phù hợp lắm") KHÔNG đủ tin cậy để action, trả về câu cảnh báo
+    thay vì gợi ý hành động.
+
+    `lead_hours` (mặc định 1, cùng tinh thần ACTION_LEAD_HOURS ở
+    hourly_market_patterns.py — bid/ngân sách cần thời gian "làm nóng"):
+    giờ NÊN hành động = giờ BẮT ĐẦU đoạn trừ đi `lead_hours`."""
+    if not segments:
+        return (
+            "Không tách được đoạn xu hướng rõ ràng nào trong ngày này (quá ít "
+            "install/giờ, hoặc LTV đi ngang không rõ xu hướng) — chưa đủ cơ sở "
+            "để gợi ý khung giờ hành động cụ thể."
+        )
+    last = segments[-1]
+    start_h = int(last["start_ts"][11:13])
+    end_h = int(last["end_ts"][11:13])
+    duration = (
+        datetime.fromisoformat(last["end_ts"]) - datetime.fromisoformat(last["start_ts"])
+    ).total_seconds() / 3600
+    pct = last["pct_change"]
+    pct_str = f"{pct:+.0f}%" if pct is not None else "?"
+
+    if duration < min_segment_hours:
+        return (
+            f"Đoạn gần cuối ngày nhất ({start_h:02d}h→{end_h:02d}h, {pct_str}) chỉ kéo dài "
+            f"~{duration:.1f} tiếng — QUÁ NGẮN để tin là 1 xu hướng thật, CHƯA nên hành động "
+            "dựa trên đoạn này (có thể chỉ là 1 giờ nhảy vọt rồi quay lại bình thường)."
+        )
+
+    action_hour = (start_h - lead_hours) % 24
+    verb = "TĂNG" if last["direction"] == "tang" else "GIẢM"
+    return (
+        f"Xu hướng {verb} BẮT ĐẦU từ **{start_h:02d}h** (kéo dài tới {end_h:02d}h, "
+        f"{duration:.1f} tiếng, đổi {pct_str}) — nếu khung giờ này lặp lại, nên "
+        f"**{verb.lower()} ngân sách từ khoảng {action_hour:02d}h** (sớm {lead_hours} "
+        "tiếng để kịp \"làm nóng\" bid trước khi vào đúng khung giờ)."
+    )
 
 
 def format_trend_segments(segments: list, max_segments_shown: int = DEFAULT_TREND_MAX_SEGMENTS_SHOWN) -> str:

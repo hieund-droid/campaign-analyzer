@@ -1437,7 +1437,17 @@ def page_campaign_doctor():
     # làm khi xem ngày đã qua (hôm nay thì gợi ý là "hành động ngay", không
     # cần biết có lặp lại hay không).
     _repeat_check_text = None
+    _segment_text = None
     if not _is_today_view2:
+        # THÊM 12/10/2026 (theo yêu cầu user — "muốn phân tích được khung giờ
+        # nào bắt đầu giảm và đưa ra suggest cụ thể hơn ... đến khung này nó
+        # giảm thì nên giảm budget"): tách đoạn xu hướng (start/end rõ ràng)
+        # từ ĐÚNG dữ liệu theo giờ của ngày đang xem — tái dùng `hourly_df`
+        # đã tải sẵn ở trang Cảnh báo (session_state), KHÔNG gọi thêm API.
+        _hourly_df_for_segment = st.session_state.get("al_hourly_df")
+        _segments_today = ia.detect_trend_segments(_hourly_df_for_segment, _flag["app"], selected_campaign)
+        _segment_text = ia.describe_actionable_segment(_segments_today)
+
         _hourly_recent_df, _hourly_recent_err = load_hourly_by_campaign_recent(
             st.session_state.get("adjust_app_tokens", ""),
             st.session_state.get("adjust_api_token", ""),
@@ -1475,8 +1485,8 @@ def page_campaign_doctor():
                 f"**Gợi ý (đang xem NGÀY ĐÃ QUA, {_baseline_hhmm}-{_latest_hhmm} "
                 f"của ngày đó — không còn \"hành động ngay\" được nữa, đây là 1 "
                 "QUAN SÁT để tham khảo):**\n"
-                f"- Khung giờ **{_baseline_hhmm}-{_latest_hhmm}** có vẻ là lúc LTV "
-                f"tốt cho campaign này. {_repeat_check_text}\n"
+                f"- {_segment_text}\n"
+                f"- {_repeat_check_text}\n"
                 "- Xem **cắt lát quốc gia/creative** bên dưới để biết nước/creative "
                 "nào đang kéo LTV lên trong khung giờ đó."
             )
@@ -1501,8 +1511,8 @@ def page_campaign_doctor():
                 f"**Gợi ý (đang xem NGÀY ĐÃ QUA, {_baseline_hhmm}-{_latest_hhmm} "
                 f"của ngày đó — không còn \"hành động ngay\" được nữa, đây là 1 "
                 "QUAN SÁT để tham khảo):**\n"
-                f"- Khung giờ **{_baseline_hhmm}-{_latest_hhmm}** có vẻ là lúc LTV "
-                f"kém cho campaign này. {_repeat_check_text}\n"
+                f"- {_segment_text}\n"
+                f"- {_repeat_check_text}\n"
                 "- Xem **cắt lát quốc gia/creative** bên dưới để biết nước/creative "
                 "nào đang kéo xuống trong khung giờ đó."
             )
@@ -1922,11 +1932,8 @@ def page_market_overview():
                     "vàng/giờ đáy — thử tăng số ngày gộp lại."
                 )
             else:
-                # Bỏ 2 cột ẨN "_peak_hours"/"_low_hours" (list giờ thô, chỉ để
-                # build_market_suggestions() tính giờ nên hành động — không
-                # phải dữ liệu để hiện trực tiếp) trước khi hiện bảng ra UI.
                 st.dataframe(
-                    summary.drop(columns=["_peak_hours", "_low_hours"]),
+                    summary,
                     width="stretch", hide_index=True,
                     column_config={
                         "LTV giờ vàng (TB)": st.column_config.NumberColumn(format="$%.4f"),
@@ -1941,7 +1948,11 @@ def page_market_overview():
                 # TỪNG thị trường (không chỉ 1 câu chung chung như trước).
                 st.markdown("**Gợi ý hành động theo từng thị trường:**")
                 st.caption(
-                    "Các nước có đủ dữ liệu quy đổi kèm giờ ĐỊA PHƯƠNG ước lượng "
+                    "THÊM 12/10/2026 (theo yêu cầu user): gợi ý giờ dựa trên "
+                    "ĐOẠN xu hướng LTV liên tục đủ dài (≥2 tiếng), KHÔNG dựa "
+                    "trên 1 giờ cao/thấp đơn lẻ — tránh gợi ý tăng ngân sách "
+                    "nhầm vào 1 giờ chỉ tình cờ cao rồi xuống ngay sau đó. Các "
+                    "nước có đủ dữ liệu quy đổi kèm giờ ĐỊA PHƯƠNG ước lượng "
                     "(VD \"≈ 07h giờ địa phương United States\") để dễ đối chiếu với "
                     "kinh nghiệm UA thực tế (VD giờ user bản địa thức dậy/mở máy) — "
                     "LƯU Ý đây là múi giờ CHUẨN đại diện, CHƯA tính giờ mùa hè (DST), "
@@ -1949,7 +1960,7 @@ def page_market_overview():
                     "múi giờ đại diện nên có thể lệch vài tiếng — dùng để tham khảo "
                     "xu hướng, không phải số chính xác tuyệt đối."
                 )
-                for s in hmp_module.build_market_suggestions(summary):
+                for s in hmp_module.build_market_suggestions_from_segments(patterns, summary["Quốc gia"]):
                     st.markdown(f"- **{s['Quốc gia']}**: {s['Gợi ý']}")
 
                 # SỬA 24/09/2026 (theo yêu cầu user — bảng dump hết mọi thị

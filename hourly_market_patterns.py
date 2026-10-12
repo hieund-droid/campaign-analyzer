@@ -185,85 +185,196 @@ def summarize_peak_and_low_hours(patterns_df: pd.DataFrame, top_n_hours: int = 3
             "Giờ đáy": ", ".join(f"{h:02d}h" for h in sorted(low["Giờ"])),
             "LTV giờ đáy (TB)": low_avg,
             "Chênh lệch (%)": diff_pct,
-            # Cột ẨN (bắt đầu bằng "_") — list giờ THÔ (không phải chuỗi hiển
-            # thị) để build_market_suggestions() tính giờ NÊN HÀNH ĐỘNG (sớm
-            # hơn giờ thực tế — xem hàm đó). app.py PHẢI bỏ 2 cột này trước
-            # khi hiện bảng ra UI (không phải dữ liệu để xem trực tiếp).
-            "_peak_hours": sorted(peak["Giờ"].tolist()),
-            "_low_hours": sorted(low["Giờ"].tolist()),
         })
     if not rows:
         return pd.DataFrame()
     return pd.DataFrame(rows).sort_values("Chênh lệch (%)", ascending=False).reset_index(drop=True)
 
 
+# THÊM 24/09/2026 theo yêu cầu user: "nên action sớm hơn tầm 1 tiếng, ví dụ
+# đến giờ tiêu của Mỹ thì tăng trước 1 tiếng thì để vào giờ tiêu bid căng là
+# vừa" — bid/ngân sách cần thời gian "làm nóng" trên hệ thống đấu giá của
+# network, tăng/giảm ĐÚNG lúc LTV đổi thường đã trễ mất phần đầu khung giờ đó.
 ACTION_LEAD_HOURS = 1
 
 
-def _format_hour_list(hours: list) -> str:
-    return ", ".join(f"{h:02d}h" for h in sorted(hours))
+# THÊM 12/10/2026 (theo yêu cầu user): `build_market_suggestions()` ở trên
+# chọn "giờ vàng"/"giờ đáy" bằng cách lấy TOP N GIỜ RIÊNG LẺ theo LTV cao/
+# thấp nhất — các giờ đó CÓ THỂ không liền nhau (VD giờ vàng là 9h, 14h, 20h
+# rải rác) và KHÔNG phân biệt được "đây là 1 ĐỢT tăng/giảm kéo dài" hay chỉ
+# là các giờ đơn lẻ tình cờ cao/thấp. User: "chỉ khi bắt đầu một đợt tăng/
+# giảm LTV dài thì mới suggest tăng/giảm budget, vì nếu LTV chỉ cao ở 1 khung
+# giờ rồi nó down xuống thì việc action tăng budget ở khung giờ đó sẽ không
+# phù hợp lắm" — cần tách ĐOẠN xu hướng LIÊN TỤC (giống
+# intraday_alerts.detect_trend_segments(), nhưng áp dụng cho đường LTV theo
+# GIỜ-TRONG-NGÀY đã gộp qua NHIỀU NGÀY của 1 thị trường, thay vì 1 ngày cụ
+# thể của 1 campaign) rồi chỉ gợi ý hành động cho đoạn ĐỦ DÀI.
+DEFAULT_MARKET_MIN_STEP_PCT = 10.0
+MIN_SEGMENT_HOURS_FOR_MARKET_ACTION = 2
 
 
-def _shift_hours_earlier(hours: list, lead_hours: int = ACTION_LEAD_HOURS) -> list:
-    """Trừ `lead_hours` tiếng cho mỗi giờ (mod 24, qua nửa đêm vẫn đúng — VD
-    giờ 0 trừ 1 tiếng ra giờ 23). THÊM 24/09/2026 theo yêu cầu user: "nên
-    action sớm hơn tầm 1 tiếng, ví dụ đến giờ tiêu của Mỹ thì tăng trước 1
-    tiếng thì để vào giờ tiêu bid căng là vừa" — bid/ngân sách cần thời gian
-    "làm nóng" trên hệ thống đấu giá của network, tăng/giảm ĐÚNG lúc LTV đổi
-    thường đã trễ mất phần đầu khung giờ đó."""
-    return sorted({(h - lead_hours) % 24 for h in hours})
+def _pct(a, b):
+    if a is None or b is None or pd.isna(a) or pd.isna(b) or a == 0:
+        return None
+    return (b - a) / a * 100
 
 
-def build_market_suggestions(summary_df: pd.DataFrame) -> list:
-    """THÊM 24/09/2026 (theo yêu cầu user — "bảng ... hãy có cả suggest ở
-    dưới ... theo đầu thị trường"): sinh 1 câu gợi ý hành động CỤ THỂ cho
-    TỪNG thị trường trong `summary_df` (kết quả summarize_peak_and_low_hours())
-    — tăng ngân sách vào ĐÚNG khung giờ vàng của thị trường đó, giảm vào ĐÚNG
-    khung giờ đáy — thay vì chỉ 1 caption chung chung áp dụng mọi thị trường
-    như nhau. Giữ nguyên thứ tự `summary_df` (đã sắp chênh lệch cao nhất lên
-    đầu — đáng làm nhất trước).
+def _build_market_segment(df: pd.DataFrame, start_idx: int, end_idx: int, direction: str) -> dict:
+    start_row = df.loc[start_idx]
+    end_row = df.loc[end_idx]
+    pct_change = _pct(start_row["LTV"], end_row["LTV"])
+    # SỬA 12/10/2026 — xem docstring intraday_alerts._build_segment() (CÙNG
+    # bug, cùng cơ chế: `direction` kế thừa từ bước kích hoạt lớn gần nhất có
+    # thể ngược dấu với % đổi THẬT đầu-cuối của cả đoạn). Luôn ưu tiên dấu
+    # thật của `pct_change`.
+    final_direction = direction if pct_change is None else ("tang" if pct_change >= 0 else "giam")
+    return {
+        "direction": final_direction,
+        "start_hour": int(start_row["Giờ"]),
+        "end_hour": int(end_row["Giờ"]),
+        "start_ltv": start_row["LTV"],
+        "end_ltv": end_row["LTV"],
+        "pct_change": pct_change,
+    }
 
-    SỬA 24/09/2026 — HÀNH ĐỘNG SỚM HƠN `ACTION_LEAD_HOURS` (mặc định 1) tiếng
-    so với khung giờ vàng/đáy THỰC TẾ (xem docstring _shift_hours_earlier()):
-    câu gợi ý giờ nêu RÕ CẢ HAI — giờ NÊN HÀNH ĐỘNG (sớm hơn) và khung giờ LTV
-    thực tế quan sát được (để biết vì sao lại chọn giờ đó)."""
-    if summary_df is None or summary_df.empty:
+
+def detect_market_trend_segments(
+    patterns_df: pd.DataFrame,
+    country: str,
+    min_step_pct: float = DEFAULT_MARKET_MIN_STEP_PCT,
+    min_endpoint_installs_ratio: float = 0.2,
+    min_absolute_installs: int = 15,
+) -> list:
+    """Input: `patterns_df` = kết quả build_hourly_market_patterns() (cột
+    "Quốc gia", "Giờ" 0-23, "Installs", "LTV" — đã gộp qua NHIỀU NGÀY). Tách
+    đường LTV theo GIỜ-TRONG-NGÀY của ĐÚNG `country` thành các ĐOẠN xu hướng
+    liên tục (tăng dần/giảm dần) — CÙNG thuật toán với
+    intraday_alerts.detect_trend_segments() (xem docstring hàm đó để biết
+    đầy đủ lý do từng bước), chuyển sang dùng "Giờ" (int 0-23) thay vì
+    timestamp đầy đủ vì đây là đường ĐÃ GỘP nhiều ngày thành 1 ngày đại diện.
+
+    KHÔNG bắc cầu qua giờ bị lọc mất (gap giữa 2 giờ liền kề trong df > 1) —
+    cùng lý do: nếu giờ ở giữa bị lọc vì quá ít install, không biết thật sự
+    chuyện gì xảy ra trong khoảng đó, không nên gộp thành 1 đoạn liền.
+
+    `min_endpoint_installs_ratio`/`min_absolute_installs` — CÙNG cơ chế
+    chống "cold start" đã dùng ở intraday_alerts.py (giờ đầu tiên luôn có
+    LTV thấp giả tạo vì user mới cài chưa kịp sinh doanh thu TRONG giờ đó,
+    áp dụng cho MỌI ngày nên vẫn đúng ở đường đã gộp nhiều ngày): điểm đầu/
+    cuối 1 bước phải đạt CẢ tỉ lệ % lẫn số tuyệt đối install (cộng dồn theo
+    thứ tự Giờ) so với install cộng dồn cuối cùng mới hợp lệ.
+
+    GIỚI HẠN ĐÃ BIẾT: không xử lý xu hướng "bắc cầu qua nửa đêm" (VD 1 đợt
+    giảm thật ra kéo dài từ 22h hôm trước sang 2h hôm sau) — vì "Giờ" ở đây
+    là chu kỳ 0-23 của 1 NGÀY ĐẠI DIỆN (đã gộp nhiều ngày), sắp xếp tuyến
+    tính 0→23 nên không nối được 23h với 0h. Chấp nhận đánh đổi này để đơn
+    giản hoá — đa số đợt tăng/giảm đáng chú ý nằm trong 1 ngày, không qua
+    nửa đêm."""
+    if patterns_df is None or patterns_df.empty:
         return []
-    # LƯU Ý escape "\$" (KHÔNG để "$" trần) — Streamlit render markdown coi 2
-    # dấu "$" trở lên trong CÙNG 1 lần gọi st.markdown() là ranh giới công
-    # thức LaTeX, nuốt mất chữ ở giữa (kể cả **bold**) — đã gặp lỗi thật
-    # (24/09/2026, user chụp ảnh chỉ ra "**giảm**" hiện nguyên văn không in
-    # đậm, dấu "$" biến mất) do câu gợi ý có 2 số tiền "$X" trong 1 câu.
+    df = patterns_df[patterns_df["Quốc gia"] == country].copy()
+    if df.empty or len(df) < 2:
+        return []
+    df = df.sort_values("Giờ").reset_index(drop=True)
+
+    df["installs_running_cum"] = df["Installs"].cumsum()
+    final_installs_cum = df["installs_running_cum"].iloc[-1]
+    min_endpoint_installs = max(
+        min_endpoint_installs_ratio * final_installs_cum if min_endpoint_installs_ratio else 0,
+        min_absolute_installs or 0,
+    )
+    if min_endpoint_installs:
+        df = df[df["installs_running_cum"] >= min_endpoint_installs].reset_index(drop=True)
+    if len(df) < 2:
+        return []
+
+    segments = []
+    current_dir = None
+    seg_start_idx = 0
+    for i in range(1, len(df)):
+        gap = df.loc[i, "Giờ"] - df.loc[i - 1, "Giờ"]
+        if gap > 1:
+            if current_dir is not None:
+                segments.append(_build_market_segment(df, seg_start_idx, i - 1, current_dir))
+            current_dir = None
+            seg_start_idx = i
+            continue
+
+        pct = _pct(df.loc[i - 1, "LTV"], df.loc[i, "LTV"])
+        if pct is None:
+            continue
+        if pct >= min_step_pct:
+            step_dir = "tang"
+        elif pct <= -min_step_pct:
+            step_dir = "giam"
+        else:
+            step_dir = None
+
+        if step_dir is None:
+            continue
+        if current_dir is None:
+            current_dir = step_dir
+            seg_start_idx = i - 1
+        elif step_dir != current_dir:
+            segments.append(_build_market_segment(df, seg_start_idx, i - 1, current_dir))
+            current_dir = step_dir
+            seg_start_idx = i - 1
+
+    if current_dir is not None:
+        segments.append(_build_market_segment(df, seg_start_idx, len(df) - 1, current_dir))
+
+    return segments
+
+
+def describe_market_segment_suggestion(segment: dict, country: str, lead_hours: int = ACTION_LEAD_HOURS) -> str:
+    """Build 1 câu gợi ý hành động từ 1 ĐOẠN xu hướng (kết quả
+    detect_market_trend_segments()) — dùng ĐÚNG giờ BẮT ĐẦU đoạn (không phải
+    giờ LTV cao/thấp nhất trong đoạn) để tính giờ NÊN hành động (đón đầu
+    `lead_hours` tiếng, cùng tinh thần `_shift_hours_earlier()`/
+    ACTION_LEAD_HOURS ở trên)."""
+    duration = segment["end_hour"] - segment["start_hour"]
+    action_hour = (segment["start_hour"] - lead_hours) % 24
+    verb = "TĂNG" if segment["direction"] == "tang" else "GIẢM"
+    pct = segment["pct_change"]
+    pct_str = f"{pct:+.0f}%" if pct is not None else "?"
+    local = format_local_hours([segment["start_hour"]], country)
+    local_txt = f" (≈ {local} giờ địa phương {country})" if local else ""
+    return (
+        f"Xu hướng {verb} BẮT ĐẦU từ **{segment['start_hour']:02d}h**{local_txt} (kéo dài tới "
+        f"{segment['end_hour']:02d}h, {duration} tiếng, đổi {pct_str}) — nên **{verb.lower()} "
+        f"ngân sách/bid từ khoảng {action_hour:02d}h** (đón đầu {lead_hours} tiếng)."
+    )
+
+
+def build_market_suggestions_from_segments(
+    patterns_df: pd.DataFrame, countries: list, min_segment_hours: int = MIN_SEGMENT_HOURS_FOR_MARKET_ACTION
+) -> list:
+    """THAY THẾ `build_market_suggestions()` (dựa trên top giờ riêng lẻ) bằng
+    gợi ý dựa trên ĐOẠN xu hướng liên tục — theo đúng yêu cầu user ("chỉ khi
+    bắt đầu một đợt tăng/giảm LTV DÀI thì mới suggest tăng/giảm budget").
+
+    Với MỖI `country` trong `countries` (thường truyền `summary_df["Quốc
+    gia"]` từ summarize_peak_and_low_hours() — đã lọc sẵn các nước đủ dữ
+    liệu): tách đoạn bằng detect_market_trend_segments(), CHỈ giữ đoạn đạt
+    tối thiểu `min_segment_hours` tiếng liên tục, rồi chọn đoạn có |% đổi|
+    LỚN NHẤT trong số đó (đáng chú ý nhất) để build gợi ý. Nếu KHÔNG có đoạn
+    nào đủ dài — trả về câu giải thích rõ lý do (KHÔNG suggest hành động cụ
+    thể, tránh gợi ý sai dựa trên biến động ngắn/nhiễu)."""
     rows = []
-    for _, r in summary_df.iterrows():
-        country = r["Quốc gia"]
-        peak_action = _format_hour_list(_shift_hours_earlier(r["_peak_hours"]))
-        low_action = _format_hour_list(_shift_hours_earlier(r["_low_hours"]))
-
-        # THÊM 12/10/2026 (theo yêu cầu user — muốn gợi ý dùng kinh nghiệm UA
-        # thực tế thay vì chỉ 1 con số giờ VN trừu tượng): nếu nước này có
-        # trong COUNTRY_UTC_OFFSET_HOURS, chú thích thêm giờ ĐỊA PHƯƠNG của
-        # khung giờ vàng/đáy THỰC TẾ — giúp giải thích/kiểm chứng bằng mắt
-        # thường VÌ SAO đó là giờ vàng (VD trùng giờ user bản địa thức dậy)
-        # thay vì chỉ tin số liệu thuần tuý. Bỏ qua (None) nếu chưa có offset
-        # cho nước đó — KHÔNG suy đoán.
-        peak_local = format_local_hours(r["_peak_hours"], country)
-        low_local = format_local_hours(r["_low_hours"], country)
-        peak_local_txt = f" (≈ {peak_local} giờ địa phương {country})" if peak_local else ""
-        low_local_txt = f" (≈ {low_local} giờ địa phương {country})" if low_local else ""
-
-        rows.append({
-            "Quốc gia": country,
-            "Gợi ý": (
-                f"**Tăng** ngân sách/bid vào khung **{peak_action}** (đón đầu "
-                f"{ACTION_LEAD_HOURS} tiếng trước khung LTV thực tế cao "
-                f"**{r['Giờ vàng']}**{peak_local_txt}, LTV TB "
-                f"\\${r['LTV giờ vàng (TB)']:.4f}) "
-                f"— **giảm**/dồn ngân sách khỏi khung **{low_action}** (đón "
-                f"đầu trước khung LTV thực tế thấp **{r['Giờ đáy']}**"
-                f"{low_local_txt}, LTV TB "
-                f"\\${r['LTV giờ đáy (TB)']:.4f}) — chênh lệch "
-                f"{r['Chênh lệch (%)'] * 100:.0f}%."
-            ),
-        })
+    for country in countries:
+        segments = detect_market_trend_segments(patterns_df, country)
+        long_enough = [s for s in segments if (s["end_hour"] - s["start_hour"]) >= min_segment_hours]
+        if not long_enough:
+            rows.append({
+                "Quốc gia": country,
+                "Gợi ý": (
+                    "Không có đợt tăng/giảm LTV nào đủ dài (≥"
+                    f"{min_segment_hours} tiếng liên tục) để gợi ý hành động cụ "
+                    "thể — LTV biến động ngắn/lẻ tẻ theo từng giờ, action theo "
+                    "1-2 giờ đơn lẻ sẽ không đáng tin."
+                ),
+            })
+            continue
+        best = max(long_enough, key=lambda s: abs(s["pct_change"] or 0))
+        rows.append({"Quốc gia": country, "Gợi ý": describe_market_segment_suggestion(best, country)})
     return rows

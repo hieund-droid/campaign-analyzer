@@ -1455,15 +1455,17 @@ def page_campaign_doctor():
         if _hourly_recent_err:
             _repeat_check_text = f"⚠️ Không tự kiểm tra được các ngày khác: {_hourly_recent_err}"
         else:
+            _baseline_hour_of_day = int(_flag["baseline_ts"][11:13])
             _repeat_result = ia.check_hour_window_repeats(
                 _hourly_recent_df,
                 _flag["app"], selected_campaign,
-                int(_flag["baseline_ts"][11:13]), int(_flag["latest_ts"][11:13]),
+                _baseline_hour_of_day, int(_flag["latest_ts"][11:13]),
                 direction=_flag.get("direction") or "tang",
                 exclude_date=_view_date_iso2,
             )
             _repeat_check_text = ia.describe_hour_window_repeat_check(
-                _repeat_result, _flag.get("direction") or "tang"
+                _repeat_result, _flag.get("direction") or "tang",
+                baseline_hour_of_day=_baseline_hour_of_day,
             )
 
     if _flag.get("direction") == "tang":

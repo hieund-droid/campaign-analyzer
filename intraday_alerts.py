@@ -828,10 +828,23 @@ def check_hour_window_repeats(
     }
 
 
-def describe_hour_window_repeat_check(result: dict | None, direction: str) -> str:
+def describe_hour_window_repeat_check(
+    result: dict | None,
+    direction: str,
+    baseline_hour_of_day: int | None = None,
+    lead_hours: int = 1,
+) -> str:
     """Build 1 câu kết luận TỰ ĐỘNG (thay cho câu hedge cũ) từ kết quả
     check_hour_window_repeats() — dùng ở trang Xét nghiệm > Theo campaign khi
-    đang xem 1 ngày ĐÃ QUA."""
+    đang xem 1 ngày ĐÃ QUA.
+
+    SỬA 12/10/2026 (user chỉ ra câu cũ "có thể tin để cân nhắc hành động"
+    KHÔNG nói rõ hành động là gì — "cân nhắc hành động thì hành động ở đây là
+    gì phải rõ ràng ra"): khi tín hiệu NHẤT QUÁN, nêu THẲNG hành động cụ thể
+    (tăng/giảm ngân sách TỪ giờ nào, trừ sẵn `lead_hours` tiếng để "làm
+    nóng" bid) thay vì chỉ nói chung chung "cân nhắc hành động". Cần
+    `baseline_hour_of_day` (giờ bắt đầu khung đang xét) để tính được giờ hành
+    động — nếu không truyền, giữ câu chung chung làm fallback."""
     dir_word = "GIẢM" if direction == "giam" else "TĂNG"
     if result is None:
         return (
@@ -846,7 +859,16 @@ def describe_hour_window_repeat_check(result: dict | None, direction: str) -> st
         )
     n, m, avg = result["days_checked"], result["days_matching"], result["avg_pct_change"]
     if m / n >= 0.5:
-        verdict = "→ tín hiệu khá NHẤT QUÁN, có thể tin để cân nhắc hành động."
+        if baseline_hour_of_day is None:
+            verdict = "→ tín hiệu khá NHẤT QUÁN, có thể tin để cân nhắc hành động."
+        else:
+            action_hour = (baseline_hour_of_day - lead_hours) % 24
+            verb = "giảm" if direction == "giam" else "tăng"
+            verdict = (
+                f"→ tín hiệu khá NHẤT QUÁN — nên **{verb} ngân sách từ khoảng "
+                f"{action_hour:02d}h** vào các ngày tới (sớm {lead_hours} tiếng "
+                "trước khung giờ này để kịp \"làm nóng\" bid)."
+            )
     else:
         verdict = (
             "→ KHÔNG nhất quán, nhiều khả năng chỉ là biến động riêng của "

@@ -30,6 +30,83 @@ import pandas as pd
 DEFAULT_TOP_N_MARKETS = 8
 DEFAULT_MIN_INSTALLS_PER_HOUR = 5
 
+# THÊM 12/10/2026 (theo yêu cầu user — muốn gợi ý dùng thêm kinh nghiệm UA
+# thực tế, VD: "US thì phải tăng tiêu lúc chiều-tối giờ VN vì khi đó bên US
+# mới dậy user mới tải và dùng app"): quy đổi "giờ vàng"/"giờ đáy" (vốn tính
+# theo mốc giờ VN, vì Adjust trả "hour" theo utc_offset=+07:00 đã cấu hình
+# sẵn — xem adjust_client.py) sang GIỜ ĐỊA PHƯƠNG của chính thị trường đó, để
+# biết NGAY vì sao khung giờ đó là vàng/đáy (VD trùng giờ user bản địa thức
+# dậy) thay vì chỉ thấy 1 con số giờ VN trừu tượng.
+#
+# QUAN TRỌNG — đây là OFFSET ĐẠI DIỆN GẦN ĐÚNG, KHÔNG chính xác tuyệt đối:
+# 1) dùng múi giờ CHUẨN (standard time), CHƯA tính giờ mùa hè (DST) — lệch
+#    thêm 1 tiếng ở các nước có áp dụng DST vào mùa hè của họ.
+# 2) nước trải dài NHIỀU múi giờ (Mỹ, Nga, Úc, Canada...) chỉ lấy 1 múi giờ
+#    đại diện (thường là nơi đông dân/đông user nhất) — KHÔNG đúng cho toàn
+#    bộ user của nước đó. Dùng để giải thích XU HƯỚNG chung, không phải số
+#    chính xác cho từng user.
+COUNTRY_UTC_OFFSET_HOURS = {
+    "United States": -5,  # đại diện: giờ Miền Đông (ET) — đông dân/user nhất
+    "Canada": -5,  # đại diện: Toronto (ET)
+    "Mexico": -6,
+    "Brazil": -3,
+    "Argentina": -3,
+    "United Kingdom": 0,
+    "Ireland": 0,
+    "Portugal": 0,
+    "Germany": 1,
+    "France": 1,
+    "Spain": 1,
+    "Italy": 1,
+    "Netherlands": 1,
+    "Poland": 1,
+    "Sweden": 1,
+    "Nigeria": 1,
+    "South Africa": 2,
+    "Egypt": 2,
+    "Turkey": 3,
+    "Russia": 3,  # đại diện: Moscow
+    "Saudi Arabia": 3,
+    "United Arab Emirates": 4,
+    "Pakistan": 5,
+    "India": 5.5,
+    "Bangladesh": 6,
+    "Vietnam": 7,
+    "Thailand": 7,
+    "Indonesia": 7,  # đại diện: Jakarta (WIB)
+    "Cambodia": 7,
+    "China": 8,
+    "Philippines": 8,
+    "Malaysia": 8,
+    "Singapore": 8,
+    "Taiwan": 8,
+    "Hong Kong": 8,
+    "Japan": 9,
+    "South Korea": 9,
+    "Australia": 10,  # đại diện: Sydney/Melbourne (AEST)
+    "New Zealand": 12,
+}
+
+
+def _vn_hour_to_local_hour(hour_vn: int, country: str) -> int | None:
+    """Giờ `hour_vn` (0-23, giờ VN — mốc Adjust đang trả về, xem docstring
+    COUNTRY_UTC_OFFSET_HOURS) -> giờ địa phương gần đúng của `country`, hoặc
+    None nếu chưa có offset cho nước đó."""
+    offset = COUNTRY_UTC_OFFSET_HOURS.get(country)
+    if offset is None:
+        return None
+    return int((hour_vn - (7 - offset)) % 24)
+
+
+def format_local_hours(hours: list, country: str) -> str | None:
+    """Đổi 1 danh sách giờ VN (VD giờ vàng/giờ đáy) sang chuỗi giờ địa phương
+    gần đúng (VD "02h, 03h"), hoặc None nếu nước đó chưa có trong
+    COUNTRY_UTC_OFFSET_HOURS (bỏ qua annotation thay vì suy đoán sai)."""
+    local_hours = [_vn_hour_to_local_hour(h, country) for h in hours]
+    if any(h is None for h in local_hours):
+        return None
+    return ", ".join(f"{h:02d}h" for h in sorted(set(local_hours)))
+
 
 def build_hourly_market_patterns(
     hourly_country_df: pd.DataFrame,
@@ -159,16 +236,32 @@ def build_market_suggestions(summary_df: pd.DataFrame) -> list:
     # đậm, dấu "$" biến mất) do câu gợi ý có 2 số tiền "$X" trong 1 câu.
     rows = []
     for _, r in summary_df.iterrows():
+        country = r["Quốc gia"]
         peak_action = _format_hour_list(_shift_hours_earlier(r["_peak_hours"]))
         low_action = _format_hour_list(_shift_hours_earlier(r["_low_hours"]))
+
+        # THÊM 12/10/2026 (theo yêu cầu user — muốn gợi ý dùng kinh nghiệm UA
+        # thực tế thay vì chỉ 1 con số giờ VN trừu tượng): nếu nước này có
+        # trong COUNTRY_UTC_OFFSET_HOURS, chú thích thêm giờ ĐỊA PHƯƠNG của
+        # khung giờ vàng/đáy THỰC TẾ — giúp giải thích/kiểm chứng bằng mắt
+        # thường VÌ SAO đó là giờ vàng (VD trùng giờ user bản địa thức dậy)
+        # thay vì chỉ tin số liệu thuần tuý. Bỏ qua (None) nếu chưa có offset
+        # cho nước đó — KHÔNG suy đoán.
+        peak_local = format_local_hours(r["_peak_hours"], country)
+        low_local = format_local_hours(r["_low_hours"], country)
+        peak_local_txt = f" (≈ {peak_local} giờ địa phương {country})" if peak_local else ""
+        low_local_txt = f" (≈ {low_local} giờ địa phương {country})" if low_local else ""
+
         rows.append({
-            "Quốc gia": r["Quốc gia"],
+            "Quốc gia": country,
             "Gợi ý": (
                 f"**Tăng** ngân sách/bid vào khung **{peak_action}** (đón đầu "
                 f"{ACTION_LEAD_HOURS} tiếng trước khung LTV thực tế cao "
-                f"**{r['Giờ vàng']}**, LTV TB \\${r['LTV giờ vàng (TB)']:.4f}) "
+                f"**{r['Giờ vàng']}**{peak_local_txt}, LTV TB "
+                f"\\${r['LTV giờ vàng (TB)']:.4f}) "
                 f"— **giảm**/dồn ngân sách khỏi khung **{low_action}** (đón "
-                f"đầu trước khung LTV thực tế thấp **{r['Giờ đáy']}**, LTV TB "
+                f"đầu trước khung LTV thực tế thấp **{r['Giờ đáy']}**"
+                f"{low_local_txt}, LTV TB "
                 f"\\${r['LTV giờ đáy (TB)']:.4f}) — chênh lệch "
                 f"{r['Chênh lệch (%)'] * 100:.0f}%."
             ),

@@ -968,22 +968,33 @@ def page_alerts():
         if al_daily_campaign != "(Cả app)":
             daily_scope = daily_scope[daily_scope["campaign"] == al_daily_campaign]
 
-        for _col in ("installs", "ad_revenue"):
+        for _col in ("installs", "ad_revenue", "network_cost"):
             daily_scope[_col] = pd.to_numeric(daily_scope[_col], errors="coerce").fillna(0)
-        daily_totals = daily_scope.groupby("day")[["installs", "ad_revenue"]].sum().sort_index()
+        daily_totals = daily_scope.groupby("day")[["installs", "ad_revenue", "network_cost"]].sum().sort_index()
         daily_totals["ltv"] = daily_totals["ad_revenue"] / daily_totals["installs"].replace(0, pd.NA)
+        # THÊM 12/10/2026 (theo yêu cầu user — "chọn khoảng ngày thì phân
+        # tích theo NGÀY chứ không phải theo GIỜ, nên có thể dùng thêm CPI"):
+        # khác với Cảnh báo "trong ngày" (CPI theo GIỜ vô nghĩa — Adjust dồn
+        # cả network_cost của ngày vào đúng 1 giờ 00:00, xem GHI_CHU_TIEN_DO.md
+        # mục "PHÁT HIỆN LỚN..." 23/09/2026), ở đây mỗi điểm là TỔNG CẢ NGÀY
+        # nên network_cost vẫn đúng/đủ cho đúng ngày đó — CPI theo ngày KHÔNG
+        # bị ảnh hưởng bởi giới hạn đó.
+        daily_totals["cpi"] = daily_totals["network_cost"] / daily_totals["installs"].replace(0, pd.NA)
 
         if len(daily_totals) < 2:
             st.info("Chỉ có 1 ngày có dữ liệu trong khoảng đã chọn — chọn khoảng rộng hơn để xem dạng biểu đồ.")
             st.dataframe(daily_totals, width="stretch")
         else:
-            dchart_col1, dchart_col2 = st.columns(2)
+            dchart_col1, dchart_col2, dchart_col3 = st.columns(3)
             with dchart_col1:
                 st.caption("Installs theo ngày:")
                 st.bar_chart(daily_totals[["installs"]])
             with dchart_col2:
                 st.caption("LTV theo ngày (= doanh thu ads ÷ installs phát sinh trong ngày đó):")
                 st.line_chart(daily_totals[["ltv"]])
+            with dchart_col3:
+                st.caption("CPI theo ngày (= chi tiêu ÷ installs — hợp lệ ở mốc NGÀY, khác CPI theo giờ ở \"Cảnh báo trong ngày\" vốn vô nghĩa):")
+                st.line_chart(daily_totals[["cpi"]])
         return
 
     if st.session_state.al_hourly_err:
@@ -1591,6 +1602,35 @@ def page_campaign_doctor():
                 },
             )
 
+            # THÊM 12/10/2026 (user thắc mắc: 1 thị trường đứng ĐẦU bảng Top 3
+            # theo chi tiêu nhưng vẫn bị gọi "thị trường phụ" — vì % ngân
+            # sách/install ở describe_market_finding() tính trên TOÀN BỘ
+            # campaign (stats["network_cost"]/stats["installs"]), KHÔNG phải
+            # trên tổng riêng 3 dòng hiện ở đây — campaign chạy rải ở nhiều
+            # nước nhỏ (mỗi nước <5 install bị top_markets_slice() lọc khỏi
+            # bảng) vẫn có thể cộng lại chiếm phần lớn ngân sách, khiến Top 3
+            # "thấy to" nhưng thực ra chỉ là thiểu số của cả campaign). Hiện
+            # rõ % Top 3 cộng lại chiếm bao nhiêu để không phải suy đoán.
+            _top3_installs_sum = pd.to_numeric(top_df["Installs"], errors="coerce").fillna(0).sum()
+            _top3_spend_sum = pd.to_numeric(top_df["Chi tiêu"], errors="coerce").fillna(0).sum()
+            _total_installs_c = stats.get("installs") or 0
+            _total_cost_c = stats.get("network_cost") or 0
+            if _total_cost_c:
+                _top3_spend_share = _top3_spend_sum / _total_cost_c * 100
+                _installs_share_txt = (
+                    f" / **{_top3_installs_sum / _total_installs_c * 100:.0f}% install**"
+                    if _total_installs_c else ""
+                )
+                st.caption(
+                    f"ℹ️ {len(top_df)} thị trường trên CỘNG LẠI chiếm "
+                    f"**{_top3_spend_share:.0f}% ngân sách**{_installs_share_txt} của CẢ "
+                    "campaign — phần còn lại nằm rải rác ở các thị trường khác (mỗi thị "
+                    "trường riêng lẻ dưới 5 install nên không lọt vào Top 3 này). Vì vậy 1 "
+                    "thị trường có thể đứng ĐẦU trong bảng Top 3 nhưng vẫn bị xếp \"thị "
+                    "trường phụ\" ở phần gợi ý bên dưới, nếu % của riêng nó so với TOÀN BỘ "
+                    "campaign (không phải so trong Top 3) chưa tới 30%."
+                )
+
             _canh_bao_col = top_df.get("Cảnh báo", pd.Series(dtype=str)).fillna("")
             any_cpi_dat = _canh_bao_col.str.contains("CPI đắt").any()
             any_ltv_kem = _canh_bao_col.str.contains("LTV thấp").any()
@@ -1852,6 +1892,15 @@ def page_market_overview():
                 # suggest ở dưới ... theo đầu thị trường"): gợi ý CỤ THỂ cho
                 # TỪNG thị trường (không chỉ 1 câu chung chung như trước).
                 st.markdown("**Gợi ý hành động theo từng thị trường:**")
+                st.caption(
+                    "Các nước có đủ dữ liệu quy đổi kèm giờ ĐỊA PHƯƠNG ước lượng "
+                    "(VD \"≈ 07h giờ địa phương United States\") để dễ đối chiếu với "
+                    "kinh nghiệm UA thực tế (VD giờ user bản địa thức dậy/mở máy) — "
+                    "LƯU Ý đây là múi giờ CHUẨN đại diện, CHƯA tính giờ mùa hè (DST), "
+                    "và các nước trải dài nhiều múi giờ (Mỹ, Nga, Úc...) chỉ lấy 1 "
+                    "múi giờ đại diện nên có thể lệch vài tiếng — dùng để tham khảo "
+                    "xu hướng, không phải số chính xác tuyệt đối."
+                )
                 for s in hmp_module.build_market_suggestions(summary):
                     st.markdown(f"- **{s['Quốc gia']}**: {s['Gợi ý']}")
 

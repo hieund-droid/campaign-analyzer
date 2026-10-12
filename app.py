@@ -1609,6 +1609,50 @@ def page_campaign_doctor():
     tcol3.metric("ROAS D0 thực tế", fmt_percent(stats["roas_d0"]))
     tcol4.metric("Retention D1 thực tế", fmt_percent(stats["retention_d1"]))
 
+    # THÊM 12/10/2026 (theo yêu cầu user — "phần xét nghiệm không thể phân
+    # tích campaign theo dài ngày à": 4 số trên chỉ GỘP CHUNG cả "Khoảng ngày
+    # kéo" thành 1 con số, không thấy được campaign đang tốt lên hay xấu đi
+    # QUA TỪNG NGÀY): thêm biểu đồ CPI/LTV/ROAS D0 THEO NGÀY cho ĐÚNG
+    # campaign đang xem — tái dùng `raw_df` đã tải sẵn (KHÔNG gọi thêm API),
+    # nhóm theo "day" rồi tính lại CPI/LTV/ROAS ĐÚNG CÁCH qua `weighted_kpis()`
+    # (không lấy trung bình cộng trực tiếp các cột tỉ lệ ecpi_all/roas_ad_d0
+    # — xem docstring hàm đó, lý do y hệt tại sao period_stats_for_campaign()
+    # cũng không làm vậy).
+    _campaign_daily_df = raw_df[
+        raw_df["app"].astype(str).str.startswith(product_id, na=False)
+        & (raw_df["campaign"] == selected_campaign)
+    ].copy()
+    _daily_rows = [
+        {
+            "day": _day,
+            "installs": (_k := weighted_kpis(_g))["installs"],
+            "cpi": _k["cpi"],
+            "ltv": _k.get("arpu_d0"),
+            "roas_d0": _k.get("roas_ad_d0"),
+        }
+        for _day, _g in _campaign_daily_df.groupby("day")
+    ]
+    _daily_df = pd.DataFrame(_daily_rows).sort_values("day").set_index("day") if _daily_rows else pd.DataFrame()
+
+    st.markdown("**Xu hướng theo ngày** (trong \"Khoảng ngày kéo\" đã chọn ở trang Cảnh báo):")
+    if len(_daily_df) < 2:
+        st.caption(
+            "Chỉ có 1 ngày dữ liệu trong \"Khoảng ngày kéo\" hiện tại — tăng số "
+            "ngày kéo ở trang Cảnh báo (tối đa 30 ngày) rồi bấm Apply lại để "
+            "xem xu hướng theo ngày."
+        )
+    else:
+        dcol1, dcol2, dcol3 = st.columns(3)
+        with dcol1:
+            st.caption("CPI theo ngày:")
+            st.line_chart(_daily_df[["cpi"]])
+        with dcol2:
+            st.caption("LTV (ARPU D0) theo ngày:")
+            st.line_chart(_daily_df[["ltv"]])
+        with dcol3:
+            st.caption("ROAS D0 theo ngày:")
+            st.line_chart(_daily_df[["roas_d0"]])
+
     suggestions = []
 
     # TẦNG 2 — HỒI SINH 24/09/2026 với thiết kế MỚI (xem docstring

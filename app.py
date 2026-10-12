@@ -393,6 +393,29 @@ def load_hourly_by_country_for_date(app_tokens_raw: str, api_token: str, date_st
     return pd.DataFrame(rows), warning_msg
 
 
+@st.cache_data(ttl=15 * 60, show_spinner="Đang kiểm tra khung giờ này có lặp lại ở các ngày khác không...")
+def load_hourly_by_campaign_recent(app_tokens_raw: str, api_token: str, days_back: int = 7):
+    """THÊM 12/10/2026 — dùng ở trang Xét nghiệm > Theo campaign để TỰ kiểm
+    tra khung giờ đang bị cờ (ở 1 ngày cụ thể) có lặp lại ở các ngày gần đây
+    không, thay vì chỉ hedge "nếu lặp lại..." rồi bắt user tự đi xem từng
+    ngày (xem ia.check_hour_window_repeats(), adjust_client.
+    fetch_hourly_by_campaign_recent_days()). Cache 15 phút (không theo
+    campaign cụ thể — kéo 1 lần, lọc theo campaign ở tầng gọi, tái dùng cho
+    MỌI campaign đang xem trong 15 phút đó, đỡ gọi API nhiều lần)."""
+    if not api_token or not app_tokens_raw:
+        return None, "Thiếu API Token / App Token."
+    app_tokens = ac.parse_app_tokens(app_tokens_raw)
+    try:
+        data = ac.fetch_hourly_by_campaign_recent_days(api_token, app_tokens, days_back=days_back, exit_on_error=False)
+    except Exception as e:  # noqa: BLE001
+        return None, f"Lỗi gọi Adjust API: {e}"
+    warning_msg = ac.extract_warnings(data)
+    rows = data.get("rows") or []
+    if not rows:
+        return pd.DataFrame(), warning_msg
+    return pd.DataFrame(rows), warning_msg
+
+
 def weighted_kpis(df: pd.DataFrame) -> dict:
     """Tính KPI tổng hợp ĐÚNG CÁCH — không lấy trung bình/tổng trực tiếp các cột
     tỉ lệ (ecpi_all, roas_ad_dN, retention_rate_dN) vì sẽ sai (đã kiểm chứng
@@ -1403,6 +1426,36 @@ def page_campaign_doctor():
     _baseline_hhmm = _flag["baseline_ts"][11:16]
     _latest_hhmm = _flag["latest_ts"][11:16]
 
+    # THÊM 12/10/2026 (theo yêu cầu user — câu gợi ý cũ chỉ HEDGE "nếu khung
+    # giờ này LẶP LẠI ở nhiều ngày khác (chưa chắc chắn chỉ với 1 ngày)..."
+    # rồi bắt USER TỰ đi xem từng ngày khác để kiểm tra: "không thể tự mở
+    # rộng xem data các ngày khác để đưa ra suggest luôn ... không"): khi
+    # đang xem 1 NGÀY ĐÃ QUA (không phải hôm nay), TỰ ĐỘNG kéo thêm dữ liệu
+    # theo giờ của ĐÚNG campaign này ở vài ngày gần đây rồi kiểm tra xem
+    # ĐÚNG khung giờ đang bị cờ có lặp lại hay không — xem ia.
+    # check_hour_window_repeats()/describe_hour_window_repeat_check(). Chỉ
+    # làm khi xem ngày đã qua (hôm nay thì gợi ý là "hành động ngay", không
+    # cần biết có lặp lại hay không).
+    _repeat_check_text = None
+    if not _is_today_view2:
+        _hourly_recent_df, _hourly_recent_err = load_hourly_by_campaign_recent(
+            st.session_state.get("adjust_app_tokens", ""),
+            st.session_state.get("adjust_api_token", ""),
+        )
+        if _hourly_recent_err:
+            _repeat_check_text = f"⚠️ Không tự kiểm tra được các ngày khác: {_hourly_recent_err}"
+        else:
+            _repeat_result = ia.check_hour_window_repeats(
+                _hourly_recent_df,
+                _flag["app"], selected_campaign,
+                int(_flag["baseline_ts"][11:13]), int(_flag["latest_ts"][11:13]),
+                direction=_flag.get("direction") or "tang",
+                exclude_date=_view_date_iso2,
+            )
+            _repeat_check_text = ia.describe_hour_window_repeat_check(
+                _repeat_result, _flag.get("direction") or "tang"
+            )
+
     if _flag.get("direction") == "tang":
         st.success(
             f"📈 **LTV đang TĂNG {_pct:.1f}%** trong khoảng ~{_gap:.1f} tiếng qua "
@@ -1423,9 +1476,7 @@ def page_campaign_doctor():
                 f"của ngày đó — không còn \"hành động ngay\" được nữa, đây là 1 "
                 "QUAN SÁT để tham khảo):**\n"
                 f"- Khung giờ **{_baseline_hhmm}-{_latest_hhmm}** có vẻ là lúc LTV "
-                "tốt cho campaign này — nếu khung giờ này LẶP LẠI ở nhiều ngày "
-                "khác (chưa chắc chắn chỉ với 1 ngày), có thể cân nhắc tăng ngân "
-                "sách vào ĐÚNG khung giờ này ở các ngày TỚI.\n"
+                f"tốt cho campaign này. {_repeat_check_text}\n"
                 "- Xem **cắt lát quốc gia/creative** bên dưới để biết nước/creative "
                 "nào đang kéo LTV lên trong khung giờ đó."
             )
@@ -1451,10 +1502,7 @@ def page_campaign_doctor():
                 f"của ngày đó — không còn \"hành động ngay\" được nữa, đây là 1 "
                 "QUAN SÁT để tham khảo):**\n"
                 f"- Khung giờ **{_baseline_hhmm}-{_latest_hhmm}** có vẻ là lúc LTV "
-                "kém cho campaign này — nếu khung giờ này LẶP LẠI ở nhiều ngày "
-                "khác (chưa chắc chắn chỉ với 1 ngày), có thể cân nhắc giảm ngân "
-                "sách/dời budget sang khung giờ khác vào các ngày TỚI, thay vì "
-                "cắt cả campaign.\n"
+                f"kém cho campaign này. {_repeat_check_text}\n"
                 "- Xem **cắt lát quốc gia/creative** bên dưới để biết nước/creative "
                 "nào đang kéo xuống trong khung giờ đó."
             )

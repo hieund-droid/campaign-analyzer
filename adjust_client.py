@@ -229,6 +229,26 @@ def fetch_hourly_by_country(api_token: str, app_tokens: list, days_back: int = 1
     return call_adjust(api_token, app_tokens, "app,hour,country", days_back=days_back, include_today=False, **kw)
 
 
+def fetch_hourly_by_campaign_recent_days(api_token: str, app_tokens: list, days_back: int = 7, **kw) -> dict:
+    """THÊM 12/10/2026 (theo yêu cầu user — trang Xét nghiệm > Theo campaign
+    đang gợi ý kiểu hedge "nếu khung giờ này LẶP LẠI ở nhiều ngày khác (chưa
+    chắc chắn chỉ với 1 ngày)..." rồi BẮT USER tự đi xem từng ngày để kiểm
+    tra — user: "không thể tự mở rộng xem data các ngày khác để đưa ra
+    suggest luôn ... thay vì bắt user phải đi check nhiều hơn"): kéo dữ liệu
+    THEO GIỜ của CHÍNH campaign đó qua NHIỀU NGÀY ĐÃ CHỐT gần đây (mặc định 7
+    ngày, KHÔNG lấy hôm nay — giống lý do ở fetch_hourly_by_country(): cần
+    ngày đã hoàn chỉnh để so sánh công bằng, không phải số đang chạy dở),
+    dùng để TỰ kiểm tra xem khung giờ đang bị cờ (ở 1 ngày cụ thể) có lặp lại
+    ở các ngày khác hay không — xem intraday_alerts.check_hour_window_repeats().
+
+    Dùng LẠI dimension "app,hour,campaign" (DETAIL_DIMENSIONS_HOURLY) y hệt
+    fetch_hourly_today()/fetch_hourly_for_date() — khác ở chỗ KÉO NHIỀU NGÀY
+    1 LẦN (qua days_back) thay vì ép đúng 1 ngày qua date_period override."""
+    return call_adjust(
+        api_token, app_tokens, DETAIL_DIMENSIONS_HOURLY, days_back=days_back, include_today=False, **kw
+    )
+
+
 def fetch_hourly_for_date(api_token: str, app_tokens: list, date_str: str, ad_spend_mode: str | None = None, **kw) -> dict:
     """THÊM 23/09/2026 (theo yêu cầu user — tạm dùng số ngày hôm trước trong
     lúc chờ Meta API): kéo dữ liệu THEO GIỜ cho 1 NGÀY CỤ THỂ trong quá khứ

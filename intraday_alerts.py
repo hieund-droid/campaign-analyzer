@@ -643,3 +643,144 @@ def list_flagged_by_trend_segments(
             "arpu_pct_change": pct,
         })
     return flagged
+
+
+# THÊM 12/10/2026 (theo yêu cầu user — trang Xét nghiệm > Theo campaign chỉ
+# đang HEDGE "nếu khung giờ này LẶP LẠI ở nhiều ngày khác (chưa chắc chắn
+# chỉ với 1 ngày)..." rồi bắt USER TỰ đi xem từng ngày khác để kiểm tra: "có
+# thể tự mở rộng xem data các ngày khác để đưa ra suggest luôn thay vì bắt
+# user phải đi check ... không"): thay vì chỉ hedge, TỰ ĐỘNG kéo thêm hourly
+# data của ĐÚNG campaign này qua vài ngày gần đây (xem
+# adjust_client.fetch_hourly_by_campaign_recent_days()) rồi kiểm tra xem
+# ĐÚNG khung giờ (giờ-trong-ngày) đang bị cờ ở ngày hiện tại có lặp lại xu
+# hướng tương tự ở các ngày khác không — trả về kết luận CỤ THỂ thay vì để
+# user tự suy luận.
+DEFAULT_MIN_MATCH_PCT_FOR_REPEAT_CHECK = 10.0
+
+
+def check_hour_window_repeats(
+    multi_day_hourly_df: pd.DataFrame,
+    app: str,
+    campaign: str,
+    baseline_hour_of_day: int,
+    latest_hour_of_day: int,
+    direction: str,
+    exclude_date: str | None = None,
+    min_absolute_installs: int = DEFAULT_MIN_ABSOLUTE_INSTALLS_FOR_RATIO,
+    min_match_pct: float = DEFAULT_MIN_MATCH_PCT_FOR_REPEAT_CHECK,
+) -> dict | None:
+    """Input: `multi_day_hourly_df` = kết quả THÔ (nhiều ngày, nhiều campaign)
+    của adjust_client.fetch_hourly_by_campaign_recent_days() — cột app, hour
+    ("YYYY-MM-DD HH:MM:SS"), campaign, installs, ad_revenue.
+
+    Với MỖI ngày khác có trong df (bỏ `exclude_date` — thường là ngày đang
+    xem, vì ngày đó đã biết kết quả rồi, không cần so lại với chính nó): tự
+    cộng dồn LTV theo giờ CỦA RIÊNG ngày đó (giống build_cumulative_by_hour(),
+    nhưng tính lại trên 1 ngày tại 1 thời điểm thay vì cả df nhiều ngày/nhiều
+    campaign cùng lúc), rồi lấy LTV cộng dồn ĐÚNG tại `baseline_hour_of_day`
+    và `latest_hour_of_day` (giờ-trong-ngày, 0-23 — KHÔNG phải timestamp đầy
+    đủ, vì ngày khác thì timestamp khác nhưng giờ-trong-ngày mới là thứ cần
+    so) để tính % đổi — SO SÁNH CÔNG BẰNG với đúng khung giờ đang bị cờ ở
+    ngày hiện tại.
+
+    Áp dụng CÙNG sàn `min_absolute_installs` (mặc định 15, xem
+    DEFAULT_MIN_ABSOLUTE_INSTALLS_FOR_RATIO) cho CẢ 2 đầu — bỏ qua ngày nào
+    installs_cum tại 1 trong 2 giờ đó chưa đạt sàn (mẫu quá nhỏ, không đủ tin
+    cậy để tính vào, GIỐNG lý do đã thêm sàn này ở find_best_swing()/
+    find_best_marginal_swing()/detect_trend_segments() — tránh lặp lại đúng
+    bug "cold start" lần nữa ở chỗ MỚI này).
+
+    `direction` ("tang"/"giam", lấy từ chính flag đang hiện ở ngày hiện tại)
+    + `min_match_pct` (mặc định 10%): 1 ngày được tính là "lặp lại" nếu %
+    đổi của nó CÙNG CHIỀU và đạt ít nhất `min_match_pct` (không tính các
+    ngày chỉ đổi rất nhẹ/gần 0 theo chiều đó là "lặp lại thật").
+
+    Trả về None nếu `multi_day_hourly_df` rỗng/campaign không có trong đó.
+    Trả về dict {"days_checked": 0, "days_matching": 0, ...} (KHÔNG None)
+    nếu có data nhưng không ngày nào đủ install ở cả 2 giờ — để phân biệt
+    "chưa kéo được gì" vs "đã kéo nhưng không đủ điều kiện để kết luận"."""
+    if multi_day_hourly_df is None or multi_day_hourly_df.empty:
+        return None
+    df = multi_day_hourly_df[
+        (multi_day_hourly_df["app"] == app) & (multi_day_hourly_df["campaign"] == campaign)
+    ].copy()
+    if df.empty:
+        return None
+
+    for col in ("installs", "ad_revenue"):
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+    df["date"] = df["hour"].str.slice(0, 10)
+    df["hour_of_day"] = df["hour"].str.slice(11, 13).astype(int)
+    if exclude_date:
+        df = df[df["date"] != exclude_date]
+    if df.empty:
+        return {"days_checked": 0, "days_matching": 0, "avg_pct_change": None, "details": []}
+
+    details = []
+    for day, g in df.groupby("date"):
+        g = g.sort_values("hour_of_day")
+        g = g.assign(
+            installs_cum=g["installs"].cumsum(),
+            ad_revenue_cum=g["ad_revenue"].cumsum(),
+        )
+        g["arpu"] = g["ad_revenue_cum"] / g["installs_cum"].replace(0, pd.NA)
+
+        base_rows = g[g["hour_of_day"] == baseline_hour_of_day]
+        latest_rows = g[g["hour_of_day"] == latest_hour_of_day]
+        if base_rows.empty or latest_rows.empty:
+            continue
+        base_row, latest_row = base_rows.iloc[0], latest_rows.iloc[0]
+        if (base_row["installs_cum"] or 0) < min_absolute_installs:
+            continue
+        if (latest_row["installs_cum"] or 0) < min_absolute_installs:
+            continue
+        pct = _pct(base_row["arpu"], latest_row["arpu"])
+        if pct is None:
+            continue
+        details.append({"date": day, "pct_change": pct})
+
+    if not details:
+        return {"days_checked": 0, "days_matching": 0, "avg_pct_change": None, "details": []}
+
+    want_negative = direction == "giam"
+    matching = [
+        d for d in details
+        if (d["pct_change"] <= -min_match_pct if want_negative else d["pct_change"] >= min_match_pct)
+    ]
+    return {
+        "days_checked": len(details),
+        "days_matching": len(matching),
+        "avg_pct_change": sum(d["pct_change"] for d in details) / len(details),
+        "details": details,
+    }
+
+
+def describe_hour_window_repeat_check(result: dict | None, direction: str) -> str:
+    """Build 1 câu kết luận TỰ ĐỘNG (thay cho câu hedge cũ) từ kết quả
+    check_hour_window_repeats() — dùng ở trang Xét nghiệm > Theo campaign khi
+    đang xem 1 ngày ĐÃ QUA."""
+    dir_word = "GIẢM" if direction == "giam" else "TĂNG"
+    if result is None:
+        return (
+            "Chưa kiểm tra được — thiếu dữ liệu theo giờ của các ngày gần đây "
+            "cho campaign này."
+        )
+    if result["days_checked"] == 0:
+        return (
+            "Đã thử kiểm tra các ngày gần đây nhưng KHÔNG đủ dữ liệu (quá ít "
+            "install ở đúng khung giờ này) để kết luận khung giờ này có lặp "
+            "lại hay không — xem như CHƯA XÁC NHẬN, cần theo dõi thêm."
+        )
+    n, m, avg = result["days_checked"], result["days_matching"], result["avg_pct_change"]
+    if m / n >= 0.5:
+        verdict = "→ tín hiệu khá NHẤT QUÁN, có thể tin để cân nhắc hành động."
+    else:
+        verdict = (
+            "→ KHÔNG nhất quán, nhiều khả năng chỉ là biến động riêng của "
+            "đúng ngày đang xem — CHƯA nên vội hành động, cần theo dõi thêm."
+        )
+    return (
+        f"Đã tự kiểm tra {n} ngày gần đây (không tính ngày đang xem): khung "
+        f"giờ này LẶP LẠI xu hướng {dir_word} ở **{m}/{n} ngày** (trung bình "
+        f"đổi {avg:+.0f}%) {verdict}"
+    )
